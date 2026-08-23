@@ -216,3 +216,40 @@ def test_stop_can_be_requested():
     trader, _, _ = make_trader()
     trader.request_stop()
     assert trader._stop.is_set()
+
+
+# ------------------------------------------------------- plugins & conformance
+
+
+def test_named_plugin_that_is_not_installed_fails_clearly():
+    from simin.exchanges.plugins import available_plugins, load_adapter
+
+    assert isinstance(available_plugins(), dict)
+    with pytest.raises(LookupError, match="no adapter plugin named"):
+        load_adapter("definitely_not_installed")
+
+
+def test_conformance_passes_for_a_correct_adapter():
+    from simin.exchanges.conformance import check_market_data
+
+    adapter, bars = make_paper()
+    report = run(check_market_data(adapter, "BTCUSDT", TF.H1, now=adapter.data.clock.now))
+    assert report.passed, report.render()
+
+
+def test_conformance_catches_an_adapter_that_serves_unclosed_bars():
+    """The failure mode that silently makes every downstream backtest optimistic."""
+    from simin.exchanges.conformance import check_market_data
+
+    adapter, bars = make_paper()
+
+    now = adapter.data.clock.now
+
+    async def leaky(symbol, tf, since, limit=1000):
+        unclosed = gbm_series(3, seed=1, start=TF.H1.floor(now))
+        return [*bars[-50:], *unclosed]
+
+    adapter.data.get_ohlcv = leaky  # type: ignore[method-assign]
+    report = run(check_market_data(adapter, "BTCUSDT", TF.H1, now=now))
+    assert not report.passed
+    assert any("unclosed" in c.name and not c.passed for c in report.checks)
