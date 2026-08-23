@@ -1,5 +1,20 @@
 -- Simin core schema. Applied on first container start.
-CREATE EXTENSION IF NOT EXISTS timescaledb;
+-- TimescaleDB is an optimisation, not a requirement. On a plain Postgres image
+-- the extension is absent, hypertable creation is skipped, and every table below
+-- is an ordinary table with the same schema and the same correctness.
+DO $$ BEGIN
+    CREATE EXTENSION IF NOT EXISTS timescaledb;
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'timescaledb unavailable - continuing with plain postgres tables';
+END $$;
+
+CREATE OR REPLACE FUNCTION simin_hypertable(tbl regclass, col text, chunk interval)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM create_hypertable(tbl, col, chunk_time_interval => chunk, if_not_exists => TRUE);
+EXCEPTION WHEN undefined_function OR feature_not_supported OR OTHERS THEN
+    RAISE NOTICE 'skipping hypertable for %', tbl;
+END $$;
 
 CREATE TABLE IF NOT EXISTS venues (
     id          smallserial PRIMARY KEY,
@@ -40,8 +55,7 @@ CREATE TABLE IF NOT EXISTS ohlcv (
                                  AND close BETWEEN low AND high AND volume >= 0),
     PRIMARY KEY (symbol_id, tf, ts)
 );
-SELECT create_hypertable('ohlcv', 'ts', chunk_time_interval => interval '7 days',
-                         if_not_exists => TRUE);
+SELECT simin_hypertable('ohlcv', 'ts', interval '7 days');
 CREATE INDEX IF NOT EXISTS ohlcv_symbol_tf_ts ON ohlcv (symbol_id, tf, ts DESC);
 
 CREATE TABLE IF NOT EXISTS trades_raw (
@@ -52,8 +66,7 @@ CREATE TABLE IF NOT EXISTS trades_raw (
     side       text NOT NULL,
     trade_id   text NOT NULL
 );
-SELECT create_hypertable('trades_raw', 'ts', chunk_time_interval => interval '1 day',
-                         if_not_exists => TRUE);
+SELECT simin_hypertable('trades_raw', 'ts', interval '1 day');
 
 CREATE TABLE IF NOT EXISTS orderbook_snap (
     symbol_id integer NOT NULL REFERENCES symbols(id),
@@ -62,8 +75,7 @@ CREATE TABLE IF NOT EXISTS orderbook_snap (
     asks      jsonb NOT NULL,
     levels    integer NOT NULL
 );
-SELECT create_hypertable('orderbook_snap', 'ts', chunk_time_interval => interval '1 day',
-                         if_not_exists => TRUE);
+SELECT simin_hypertable('orderbook_snap', 'ts', interval '1 day');
 
 -- derivatives context from global venues: the only non-price-derived signal
 -- family available (funding / OI / liquidations), see docs/01 §1.1
@@ -77,8 +89,7 @@ CREATE TABLE IF NOT EXISTS derivs (
     liq_short        numeric,
     PRIMARY KEY (symbol, ts)
 );
-SELECT create_hypertable('derivs', 'ts', chunk_time_interval => interval '30 days',
-                         if_not_exists => TRUE);
+SELECT simin_hypertable('derivs', 'ts', interval '30 days');
 
 -- the Toman leg: every IRT pair decomposes into crypto beta x USDT/IRT
 CREATE TABLE IF NOT EXISTS fx_irt (
@@ -97,8 +108,10 @@ CREATE TABLE IF NOT EXISTS data_quality_log (
     issues    jsonb NOT NULL
 );
 
+-- Compression policies are Timescale-only; absence is not an error.
 DO $$ BEGIN
     PERFORM add_compression_policy('ohlcv', INTERVAL '90 days');
     PERFORM add_compression_policy('trades_raw', INTERVAL '30 days');
-EXCEPTION WHEN others THEN NULL;
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'compression policies skipped (timescaledb not present)';
 END $$;

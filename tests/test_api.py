@@ -3,9 +3,9 @@
 import pytest
 
 pytest.importorskip("fastapi")
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient
 
-from simin.api import app  # noqa: E402
+from simin.api import app
 
 client = TestClient(app)
 

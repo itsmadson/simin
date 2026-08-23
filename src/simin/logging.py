@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from collections.abc import MutableMapping
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -92,8 +93,10 @@ def configure_logging(level: str = "INFO", *, as_json: bool = True) -> None:
     if not _HAVE_STRUCTLOG:
         return
 
-    def _redact_processor(_l: Any, _n: str, event: dict[str, Any]) -> dict[str, Any]:
-        return redact(event)
+    def _redact_processor(
+        _l: Any, _n: str, event: MutableMapping[str, Any]
+    ) -> MutableMapping[str, Any]:
+        return redact(dict(event))
 
     renderer: Any = (
         structlog.processors.JSONRenderer() if as_json else structlog.dev.ConsoleRenderer()

@@ -1,5 +1,7 @@
 """Labelling, purged CV and model behaviour."""
 
+import itertools
+
 import numpy as np
 import pytest
 from factories import gbm_series
@@ -118,7 +120,7 @@ def test_walk_forward_splits_are_chronological_and_disjoint():
     assert splits
     for split in splits:
         assert max(split.train) < min(split.test)
-    for a, b in zip(splits, splits[1:], strict=False):
+    for a, b in itertools.pairwise(splits):
         assert min(b.test) > min(a.test)
 
 

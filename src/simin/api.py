@@ -68,8 +68,11 @@ def limits(risk_profile: str | None = None) -> dict[str, Any]:
     try:
         selected = RiskProfile(risk_profile) if risk_profile else get_settings().risk_profile
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"unknown risk profile {risk_profile!r}") from exc
-    return {"profile": selected, "limits": {k: str(v) for k, v in limits_for(selected).model_dump().items()}}
+        raise HTTPException(
+            status_code=400, detail=f"unknown risk profile {risk_profile!r}"
+        ) from exc
+    values = {k: str(v) for k, v in limits_for(selected).model_dump().items()}
+    return {"profile": selected, "limits": values}
 
 
 @app.get("/feasibility")
@@ -92,12 +95,14 @@ def gates() -> dict[str, Any]:
             {"n": 3, "name": "deflated Sharpe (out of sample)", "required": ">=0.95"},
             {"n": 4, "name": "Monte Carlo probability of ruin", "required": "<=1%"},
             {"n": 5, "name": "survives 2x modelled cost", "required": "still profitable"},
-            {"n": 6, "name": "beats every benchmark incl. hold-USDT", "required": "strictly better"},
+            {"n": 6, "name": "beats every benchmark incl. hold-USDT",
+             "required": "strictly better"},
             {"n": 7, "name": "drawdown within Monte Carlo p95", "required": "no worse"},
             {"n": 8, "name": "meaningful trade count", "required": ">=100"},
             {"n": 9, "name": "paper trading duration", "required": ">=60 days"},
             {"n": 10, "name": "paper closed trades", "required": ">=200"},
-            {"n": 11, "name": "operational stability", "required": "0 exceptions, slippage <=1.5x"},
+            {"n": 11, "name": "operational stability",
+         "required": "0 exceptions, slippage <=1.5x"},
             {"n": 12, "name": "human approval", "required": "explicit sign-off"},
         ],
         "initial_live_allocation": "2% of intended capital",

@@ -20,8 +20,8 @@ from simin.backtest.costs import CostModel
 from simin.exchanges.base import ExchangeAdapter, OrderRejected
 from simin.types import (
     TF,
-    Bar,
     Balance,
+    Bar,
     FeeSchedule,
     Fill,
     Order,

@@ -1,19 +1,36 @@
 name: simin
 
+# One command brings the whole system up:
+#
+#     docker compose up -d
+#
+# postgres -> bootstrap (loads real market history) -> api + trader (paper mode).
+# Nothing here can place a real order: SIMIN_MODE defaults to paper and live mode
+# additionally requires an approval token that no default environment has.
+
 x-app: &app
-  build: .
-  env_file: .env
-  depends_on:
-    postgres: { condition: service_healthy }
-    redis: { condition: service_started }
+  build:
+    context: .
+    args:
+      PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+  environment:
+    SIMIN_PG_DSN: postgresql+asyncpg://simin:simin@postgres:5432/simin
+    SIMIN_REDIS_URL: redis://redis:6379/0
+    SIMIN_MODE: ${SIMIN_MODE:-paper}
+    SIMIN_RISK_PROFILE: ${SIMIN_RISK_PROFILE:-balanced}
+    SIMIN_PUBLIC_DATA_BASE: ${SIMIN_PUBLIC_DATA_BASE:-https://api.binance.com}
+    SIMIN_LOG_LEVEL: ${SIMIN_LOG_LEVEL:-INFO}
+    SIMIN_LOG_JSON: ${SIMIN_LOG_JSON:-true}
+    SIMIN_PAPER_START_BALANCE_IRT: ${SIMIN_PAPER_START_BALANCE_IRT:-100000000}
   volumes:
-    - ./src:/app/src:ro
     - simin-data:/data
-  restart: unless-stopped
 
 services:
   postgres:
-    image: timescale/timescaledb:latest-pg16
+    # TimescaleDB when available, plain Postgres otherwise: the schema detects
+    # the extension at init time and degrades to regular tables if it is absent.
+    # Override with SIMIN_PG_IMAGE=timescale/timescaledb:latest-pg16 for hypertables.
+    image: ${SIMIN_PG_IMAGE:-postgres:16}
     environment:
       POSTGRES_USER: simin
       POSTGRES_PASSWORD: simin
@@ -22,37 +39,74 @@ services:
       - simin-pg:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U simin"]
+      test: ["CMD-SHELL", "pg_isready -U simin -d simin"]
       interval: 5s
       timeout: 5s
-      retries: 10
-    ports: ["5432:5432"]
+      retries: 20
+    restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: ${SIMIN_REDIS_IMAGE:-redis:7-alpine}
     command: ["redis-server", "--appendonly", "yes"]
-    volumes: [simin-redis:/data]
-    ports: ["6379:6379"]
+    volumes:
+      - simin-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Loads real market history on first boot, then exits. Idempotent: re-running
+  # it only fetches bars that are missing.
+  bootstrap:
+    <<: *app
+    command: ["sh", "docker/bootstrap.sh"]
+    environment:
+      SIMIN_PG_DSN: postgresql+asyncpg://simin:simin@postgres:5432/simin
+      SIMIN_PUBLIC_DATA_BASE: ${SIMIN_PUBLIC_DATA_BASE:-https://api.binance.com}
+      SIMIN_BOOTSTRAP_SYMBOLS: ${SIMIN_BOOTSTRAP_SYMBOLS:-BTCUSDT ETHUSDT SOLUSDT}
+      SIMIN_BOOTSTRAP_TIMEFRAMES: ${SIMIN_BOOTSTRAP_TIMEFRAMES:-1h 4h 1d}
+      SIMIN_BOOTSTRAP_START: ${SIMIN_BOOTSTRAP_START:-2022-01-01}
+      SIMIN_LOG_JSON: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: on-failure:3
 
   api:
     <<: *app
     command: ["uvicorn", "simin.api:app", "--host", "0.0.0.0", "--port", "8000"]
-    ports: ["8000:8000"]
+    ports:
+      - "${SIMIN_API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
 
-  ingestor:
-    <<: *app
-    command: ["python", "-m", "simin.cli", "backfill", "--symbols", "BTCUSDT", "ETHUSDT",
-              "--timeframes", "1h", "4h", "1d"]
-    restart: on-failure
-
-  # The trader is deliberately a single replica. Two trader processes would open
-  # two copies of every position; scale this service and you double your risk.
+  # Paper trading. Single replica by construction: two traders would open two
+  # copies of every position. Waits for the first data load to finish.
   trader:
     <<: *app
     command: ["python", "-m", "simin.trader"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      bootstrap:
+        condition: service_completed_successfully
     deploy:
-      replicas: 0        # enabled in Phase 9, never on first boot
-    profiles: ["trading"]
+      replicas: 1
+    restart: unless-stopped
 
 volumes:
   simin-pg:

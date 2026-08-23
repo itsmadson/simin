@@ -10,7 +10,6 @@ Thresholds come from docs/03-risk-and-validation.md §5.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 
@@ -29,7 +28,10 @@ class Gate:
 
     def line(self) -> str:
         mark = "PASS" if self.passed else "FAIL"
-        return f"[{mark}] {self.number:>2}. {self.name:<34} {self.observed:>18}  (need {self.required})"
+        return (
+            f"[{mark}] {self.number:>2}. {self.name:<34} "
+            f"{self.observed:>18}  (need {self.required})"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +53,8 @@ class GateReport:
             "VERDICT: GO — all gates green. Live trading may be enabled by a human, "
             "starting at <=2% of intended capital."
             if self.passed
-            else f"VERDICT: NO-GO — {len(self.failures)} gate(s) failed. Live trading stays disabled."
+            else f"VERDICT: NO-GO — {len(self.failures)} gate(s) failed. "
+            "Live trading stays disabled."
         )
         return f"{header}\n{'=' * len(header)}\n{body}\n\n{verdict}"
 
@@ -111,7 +114,8 @@ def evaluate_gates(
              f"{out_of_sample.total_return:.1%} vs {worst_benchmark}", "strictly better")
     )
     gates.append(
-        Gate(7, "max drawdown within MC p95", out_of_sample.max_drawdown >= monte_carlo.p95_max_drawdown,
+        Gate(7, "max drawdown within MC p95",
+             out_of_sample.max_drawdown >= monte_carlo.p95_max_drawdown,
              f"{out_of_sample.max_drawdown:.1%}", f">={monte_carlo.p95_max_drawdown:.1%}")
     )
     gates.append(

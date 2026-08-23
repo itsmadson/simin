@@ -52,7 +52,7 @@ class TokenBucket:
             await asyncio.sleep(deficit * self.per_seconds / self.capacity)
 
 
-async def with_retry(
+async def with_retry[T](
     fn: Callable[[], Awaitable[T]],
     *,
     attempts: int = 4,

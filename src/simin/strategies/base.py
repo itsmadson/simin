@@ -49,6 +49,14 @@ class Strategy(abc.ABC):
     name: str
     #: Minimum bars needed before this strategy may act.
     warmup: int = 200
+    #: "risk"  -> size from the risk budget and the stop distance (every real strategy)
+    #: "full"  -> deploy all available capital, ignoring the stop distance
+    #:
+    #: "full" exists for capital benchmarks such as buy-and-hold. A risk-sized
+    #: buy-and-hold deploys a sliver of the account and returns roughly zero,
+    #: which would make "beats buy and hold" a gate that passes by default —
+    #: the comparison has to be against actually holding the asset.
+    allocation: str = "risk"
 
     @abc.abstractmethod
     def generate(self, ctx: StrategyContext) -> Intent | None:

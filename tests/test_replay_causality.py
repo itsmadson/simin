@@ -75,7 +75,7 @@ def test_ticker_reflects_only_visible_data_and_applies_spread():
 
 
 def test_ticker_raises_before_any_data_is_visible():
-    adapter, bars = make_adapter()
+    adapter, _bars = make_adapter()
     with pytest.raises(Exception, match="no visible data"):
         run(adapter.get_ticker("BTCUSDT"))
 

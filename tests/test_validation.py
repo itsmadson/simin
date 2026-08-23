@@ -21,7 +21,6 @@ from simin.validation.gates import (
 )
 from simin.validation.montecarlo import MonteCarloReport, simulate, stress_scenarios
 from simin.validation.walkforward import (
-    WalkForwardReport,
     split_holdout,
     walk_forward,
 )

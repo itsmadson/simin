@@ -108,7 +108,8 @@ def classify(
     # Panic first: it overrides everything, because the cost of trading through a
     # crash dwarfs the cost of missing the bounce.
     if mom6 is not None and mom6 <= cfg.panic_return and vol_pct >= cfg.panic_vol_pct:
-        return RegimeState(Regime.PANIC, adx, vol_pct, f"{mom6:.1%} over 6 bars at vol p{vol_pct:.0%}")
+        reason = f"{mom6:.1%} over 6 bars at vol p{vol_pct:.0%}"
+        return RegimeState(Regime.PANIC, adx, vol_pct, reason)
 
     trending = adx >= cfg.adx_trending
     strong = adx >= cfg.adx_strong

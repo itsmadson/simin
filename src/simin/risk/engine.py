@@ -12,7 +12,7 @@ in a drawdown halt cannot compute its way to a position.
 from __future__ import annotations
 
 import enum
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -197,7 +197,9 @@ class RiskEngine:
     ) -> Decision:
         """Approve or reject, and size if approved. Order of checks is deliberate."""
         if state.kill_switch:
-            return Decision(False, Decimal(0), RejectReason.KILL_SWITCH, detail=state.kill_reason or "")
+            return Decision(
+                False, Decimal(0), RejectReason.KILL_SWITCH, detail=state.kill_reason or ""
+            )
 
         if abs(state.drawdown) >= self.limits.dd_halt:
             state.trip(f"drawdown {float(state.drawdown):.1%} breached halt")
@@ -212,9 +214,12 @@ class RiskEngine:
         if state.consecutive_losses >= self.limits.max_consecutive_losses:
             return Decision(False, Decimal(0), RejectReason.LOSS_STREAK)
 
-        if state.last_data_ts is not None and now is not None:
-            if now - state.last_data_ts > max_staleness:
-                return Decision(False, Decimal(0), RejectReason.STALE_DATA)
+        if (
+            state.last_data_ts is not None
+            and now is not None
+            and now - state.last_data_ts > max_staleness
+        ):
+            return Decision(False, Decimal(0), RejectReason.STALE_DATA)
 
         if not intent.stop_is_protective or intent.stop_distance <= 0:
             return Decision(False, Decimal(0), RejectReason.INVALID_STOP)
@@ -282,7 +287,10 @@ class RiskEngine:
     @staticmethod
     def gross_exposure(state: AccountState, prices: Mapping[str, Decimal] | None = None) -> Decimal:
         return sum(
-            (p.notional(prices.get(p.symbol) if prices else None) for p in state.positions.values()),
+            (
+                p.notional(prices.get(p.symbol) if prices else None)
+                for p in state.positions.values()
+            ),
             start=Decimal(0),
         )
 

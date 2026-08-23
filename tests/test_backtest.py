@@ -7,7 +7,7 @@ import pytest
 from factories import bar, gbm_series, series
 
 from simin.backtest.costs import CostModel
-from simin.backtest.engine import Backtester, BacktestConfig, run_suite
+from simin.backtest.engine import BacktestConfig, Backtester, run_suite
 from simin.config import RiskProfile, limits_for
 from simin.risk.engine import RiskEngine
 from simin.strategies import build
@@ -162,7 +162,8 @@ def test_costs_reduce_returns_monotonically():
     cheap = make(use_regime_filter=False, cost=FREE).run(bars, build("trend_follow"))
     dear = make(
         use_regime_filter=False,
-        cost=CostModel(fees=FeeSchedule(Decimal("0.002"), Decimal("0.003")), spread_bps=Decimal(60)),
+        cost=CostModel(fees=FeeSchedule(Decimal("0.002"), Decimal("0.003")),
+            spread_bps=Decimal(60)),
     ).run(bars, build("trend_follow"))
     assert dear.metrics.total_return < cheap.metrics.total_return
 

@@ -17,6 +17,7 @@ that are all transforms of recent returns adds variance, not information
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections.abc import Sequence
 
@@ -111,7 +112,7 @@ def rsi(values: Sequence[float], period: int = 14) -> Series:
     _check_period(period)
     gains: list[float] = [0.0]
     losses: list[float] = [0.0]
-    for prev, cur in zip(values, values[1:], strict=False):
+    for prev, cur in itertools.pairwise(values):
         change = cur - prev
         gains.append(max(change, 0.0))
         losses.append(max(-change, 0.0))
@@ -139,7 +140,7 @@ def adx(bars: Sequence[Bar], period: int = 14) -> Series:
         return out
     plus_dm: list[float] = [0.0]
     minus_dm: list[float] = [0.0]
-    for prev, cur in zip(bars, bars[1:], strict=False):
+    for prev, cur in itertools.pairwise(bars):
         up = float(cur.high) - float(prev.high)
         down = float(prev.low) - float(cur.low)
         plus_dm.append(up if up > down and up > 0 else 0.0)
@@ -200,12 +201,13 @@ def zscore(values: Sequence[float], period: int) -> Series:
 
 def log_returns(values: Sequence[float]) -> Series:
     out: Series = [None]
-    for prev, cur in zip(values, values[1:], strict=False):
+    for prev, cur in itertools.pairwise(values):
         out.append(math.log(cur / prev) if prev > 0 and cur > 0 else None)
     return out
 
 
-def realized_vol(values: Sequence[float], period: int = 24, bars_per_year: int = 24 * 365) -> Series:
+def realized_vol(values: Sequence[float], period: int = 24,
+    bars_per_year: int = 24 * 365) -> Series:
     """Annualized realized volatility from log returns.
 
     Volatility, not direction, is the forecastable quantity in markets — this
@@ -297,7 +299,8 @@ def vwap_session(bars: Sequence[Bar], period: int = 24) -> Series:
     return out
 
 
-def macd(values: Sequence[float], fast: int = 12, slow: int = 26, signal: int = 9) -> tuple[Series, Series]:
+def macd(values: Sequence[float], fast: int = 12, slow: int = 26,
+    signal: int = 9) -> tuple[Series, Series]:
     """Kept for the benchmark suite only.
 
     MACD is a smoothed difference of EMAs and is ~90% correlated with a plain

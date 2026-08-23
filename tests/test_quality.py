@@ -77,7 +77,8 @@ def test_price_jump_is_flagged_as_warning_not_error():
 
 def test_zero_volume_run_is_flagged():
     bars = [
-        bar(datetime(2024, 1, 1, tzinfo=UTC) + i * TF.H1.delta, 100, volume=0 if 10 <= i < 30 else 5)
+        bar(datetime(2024, 1, 1, tzinfo=UTC) + i * TF.H1.delta, 100,
+            volume=0 if 10 <= i < 30 else 5)
         for i in range(40)
     ]
     assert "zero_volume_run" in {i.kind for i in check_bars(bars).issues}

@@ -76,7 +76,11 @@ class WalkForwardReport:
         return total - 1
 
     def table(self) -> str:
-        lines = [f"{'window':>6} {'test start':<12} {'return':>9} {'sharpe':>8} {'maxdd':>8} {'trades':>7}"]
+        header = (
+            f"{'window':>6} {'test start':<12} {'return':>9} "
+            f"{'sharpe':>8} {'maxdd':>8} {'trades':>7}"
+        )
+        lines = [header]
         for w in self.windows:
             m = w.result.metrics
             lines.append(
@@ -148,7 +152,9 @@ def walk_forward(
     return WalkForwardReport(strategy=factory().name, windows=windows)
 
 
-def split_holdout(bars: Sequence[Bar], holdout_fraction: float = 0.2) -> tuple[list[Bar], list[Bar]]:
+def split_holdout(
+    bars: Sequence[Bar], holdout_fraction: float = 0.2
+) -> tuple[list[Bar], list[Bar]]:
     """Chronological research/holdout split.
 
     The holdout is opened once, at the end. Looking at it, adjusting, and looking

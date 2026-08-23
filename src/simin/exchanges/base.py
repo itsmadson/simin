@@ -14,8 +14,8 @@ from datetime import datetime
 
 from simin.types import (
     TF,
-    Bar,
     Balance,
+    Bar,
     FeeSchedule,
     Order,
     OrderBook,
@@ -85,9 +85,9 @@ class ExchangeAdapter(abc.ABC):
     @abc.abstractmethod
     async def health(self) -> VenueHealth: ...
 
-    async def watch_trades(self, symbols: list[str]) -> AsyncIterator[Trade]:
+    def watch_trades(self, symbols: list[str]) -> AsyncIterator[Trade]:
+        """Stream trades. Adapters without a stream raise on iteration."""
         raise NotImplementedError(f"{self.venue} has no trade stream")
-        yield  # pragma: no cover - makes this an async generator
 
     # --- trading surface: only adapters with supports_trading=True implement these ---
 

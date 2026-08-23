@@ -1,7 +1,6 @@
 """Paper adapter and trader loop."""
 
 import asyncio
-from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -29,7 +28,8 @@ def make_paper(balance="1000000", symbol="BTCUSDT", n=600):
     data.load(symbol, TF.H1, bars)
     adapter = PaperAdapter(
         data=data,
-        cost=CostModel(fees=FeeSchedule(Decimal("0.002"), Decimal("0.0025")), spread_bps=Decimal(20)),
+        cost=CostModel(fees=FeeSchedule(Decimal("0.002"), Decimal("0.0025")),
+            spread_bps=Decimal(20)),
         quote_asset="USDT",
         starting_balance=Decimal(balance),
     )
@@ -179,13 +179,13 @@ def test_live_mode_without_an_approval_token_refuses_to_start():
 
 
 def test_tick_runs_without_error_and_may_open_a_position():
-    trader, adapter, _ = make_trader()
+    trader, _adapter, _ = make_trader()
     run(trader.tick())
     assert trader.state.errors == 0
 
 
 def test_the_same_bar_is_never_traded_twice():
-    trader, adapter, _ = make_trader()
+    trader, _adapter, _ = make_trader()
     run(trader.tick())
     orders_after_first = trader.state.orders_sent
     run(trader.tick())
@@ -200,7 +200,7 @@ def test_a_tripped_kill_switch_blocks_the_whole_loop():
 
 
 def test_insufficient_history_does_not_trade():
-    adapter, bars = make_paper(n=100)
+    adapter, _bars = make_paper(n=100)
     trader = Trader(
         adapter=adapter,
         risk=RiskEngine(limits_for(RiskProfile.BALANCED)),
@@ -232,7 +232,7 @@ def test_named_plugin_that_is_not_installed_fails_clearly():
 def test_conformance_passes_for_a_correct_adapter():
     from simin.exchanges.conformance import check_market_data
 
-    adapter, bars = make_paper()
+    adapter, _bars = make_paper()
     report = run(check_market_data(adapter, "BTCUSDT", TF.H1, now=adapter.data.clock.now))
     assert report.passed, report.render()
 

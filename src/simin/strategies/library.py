@@ -149,6 +149,7 @@ class BuyAndHold(Strategy):
 
     name = "buy_and_hold"
     warmup = 1
+    allocation = "full"
 
     def generate(self, ctx: StrategyContext) -> Intent | None:
         if ctx.bar_index != self.warmup or ctx.position is not None:
@@ -264,4 +265,4 @@ def build(name: str, **kwargs: object) -> Strategy:
         cls = registry[name]
     except KeyError as exc:
         raise KeyError(f"unknown strategy {name!r}; known: {sorted(registry)}") from exc
-    return cls(**kwargs)  # type: ignore[arg-type]
+    return cls(**kwargs)

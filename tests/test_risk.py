@@ -107,7 +107,8 @@ def test_per_asset_exposure_is_capped_by_trimming_not_rejecting():
     eng, state = engine(), account(100_000)
     d = eng.evaluate(state, intent(entry=100, stop=99.9))   # tiny stop -> huge raw size
     assert d.approved
-    assert d.qty * Decimal(100) <= state.equity * limits_for(RiskProfile.BALANCED).max_exposure_per_asset
+    cap = state.equity * limits_for(RiskProfile.BALANCED).max_exposure_per_asset
+    assert d.qty * Decimal(100) <= cap
 
 
 def test_total_exposure_cap_blocks_when_full():

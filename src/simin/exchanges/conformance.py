@@ -8,6 +8,7 @@ debug later: timezone handling, bar closure, ordering, and idempotency.
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -63,7 +64,7 @@ async def check_market_data(
             )
         )
         checks.append(
-            Check("bars are ascending", all(a.ts < b.ts for a, b in zip(bars, bars[1:], strict=False)))
+            Check("bars are ascending", all(a.ts < b.ts for a, b in itertools.pairwise(bars)))
         )
         checks.append(
             Check(

@@ -55,7 +55,8 @@ class LogisticModel:
             self.scale_ = scale
         if self.mean_ is None or self.scale_ is None:
             raise RuntimeError("model is not fitted")
-        return (x - self.mean_) / self.scale_
+        standardized: np.ndarray = (x - self.mean_) / self.scale_
+        return standardized
 
     def fit(
         self, x: Sequence[Sequence[float]], y: Sequence[int], weights: Sequence[float] | None = None

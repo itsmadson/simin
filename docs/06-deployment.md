@@ -7,30 +7,55 @@ Docker + Docker Compose, ~4 GB RAM, ~20 GB disk for a few years of 1h/4h/1d bars
 
 ```bash
 git clone https://github.com/itsmadson/simin.git && cd simin
-cp .env.example .env          # edit if needed; defaults are safe (PAPER, no keys)
-docker compose up -d postgres redis
-docker compose run --rm api python -m simin.cli costs      # sanity check
-docker compose up -d api
-open http://localhost:8000                                  # dashboard
+docker compose up -d
 ```
 
-`SIMIN_MODE` defaults to `paper` and `SIMIN_LIVE_APPROVAL_TOKEN` is unset, so the system cannot place a real order in this state even if you ask it to.
+That is the entire setup. The stack starts in this order:
 
-## 3. Load history
+```
+postgres (schema created on first boot)  ->  bootstrap (downloads real market history)
+                                          -> api + dashboard on :8000
+                                          -> trader (paper mode, live data)
+```
+
+No `.env` file is required; every setting has a working default. `SIMIN_MODE` defaults to
+`paper` and `SIMIN_LIVE_APPROVAL_TOKEN` is unset, so this system cannot place a real order in
+its default state even if you ask it to.
+
+### Common overrides
+
+| Situation | Command |
+|---|---|
+| Port 8000 is taken | `SIMIN_API_PORT=8010 docker compose up -d` |
+| Different universe / history | `SIMIN_BOOTSTRAP_SYMBOLS="BTCUSDT ETHUSDT" SIMIN_BOOTSTRAP_START=2020-01-01 docker compose up -d` |
+| Want TimescaleDB hypertables | `SIMIN_PG_IMAGE=timescale/timescaledb:latest-pg16 docker compose up -d` |
+| pypi.org unreachable (common in Iran) | `docker compose build --build-arg PIP_INDEX_URL=https://<mirror>/simple/` |
+| Docker Hub unreachable | configure a registry mirror in `/etc/docker/daemon.json`, or pre-pull `postgres:16` and `redis:7-alpine` |
+
+TimescaleDB is detected at schema-init time: with it you get hypertables and compression,
+without it the same tables are created as ordinary Postgres tables. Correctness is identical;
+only large-scale performance differs.
+
+## 3. Loading more history
+
+The bootstrap service already loaded data on first boot. To extend it:
 
 ```bash
-docker compose run --rm api python -m simin.cli backfill \
-  --symbols BTCUSDT ETHUSDT SOLUSDT --timeframes 1h 4h 1d --start 2021-01-01
+docker compose exec api python -m simin.cli backfill \
+  --symbols SOLUSDT --timeframes 1h 4h 1d --start 2020-01-01
 ```
 
-Backfill is idempotent and resumable — safe to re-run after any interruption. It validates as it goes and writes a quality report to `data_quality_log`; unrepaired gaps are errors, not warnings, because features computed across a gap are silently wrong.
+Backfill is idempotent, resumable, and fills **both** ends of the stored range — asking for an
+earlier `--start` than you already have extends history backwards rather than doing nothing.
+It validates as it goes and writes a quality report to `data_quality_log`; unrepaired gaps are
+errors, not warnings, because features computed across a gap are silently wrong.
 
 ## 4. Run research
 
 ```bash
-docker compose run --rm api python -m simin.cli research \
+docker compose exec api python -m simin.cli research \
   --symbol BTCUSDT --symbol-id 1 --timeframe 4h \
-  --strategy trend_follow --start 2021-01-01 --trials 1
+  --strategy trend_follow --start 2022-01-01 --trials 1
 ```
 
 Set `--trials` to the number of parameter variants you actually tried. It feeds the deflated Sharpe ratio, and understating it inflates your own result — the person that deceives is you.
@@ -39,8 +64,9 @@ Exit code is `0` only when every Go/No-Go gate passes, so this is CI-friendly.
 
 ## 5. Paper trading
 
+The trader starts automatically with `docker compose up -d`. To watch it:
+
 ```bash
-docker compose --profile trading up -d trader
 docker compose logs -f trader
 ```
 

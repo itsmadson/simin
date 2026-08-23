@@ -24,7 +24,6 @@ from simin.exchanges.venues import profile
 from simin.features.engine import BARS_PER_YEAR, FeatureRow, build_features
 from simin.features.regime import RegimeConfig, RegimeState, classify
 from simin.risk.engine import (
-    AccountState,
     Intent,
     OpenPosition,
     RejectReason,
@@ -125,6 +124,13 @@ class Backtester:
                 depth = self._reference_depth(bar)
                 fill_price = self.cost.fill_price(bar.open, Side.BUY, pending_qty, depth)
                 notional = fill_price * pending_qty
+                if strategy.allocation == "full" and notional > cash and fill_price > 0:
+                    # A fully-invested benchmark buys what the cash actually covers
+                    # at the real fill price, which is not knowable when the order
+                    # is sized on the previous bar's close.
+                    fee_rate = self.cost.fees.taker
+                    pending_qty = cash / (fill_price * (Decimal(1) + fee_rate))
+                    notional = fill_price * pending_qty
                 if notional <= cash:
                     entry_fee = self.cost.fee(notional)
                     cash -= notional + entry_fee
@@ -146,7 +152,9 @@ class Backtester:
             pending, pending_qty = None, Decimal(0)
 
             # ---- 3. manage an open position against THIS bar's range
-            if position is not None:
+            if position is not None and strategy.allocation == "full":
+                exit_price, exit_reason = None, ""   # buy and hold means hold
+            elif position is not None:
                 exit_price, exit_reason = self._check_exit(bar, position, i, opened_index)
                 if exit_price is None and self._thesis_expired(strategy, rows, i, position, bar):
                     exit_price, exit_reason = bar.close, "signal"
@@ -175,7 +183,7 @@ class Backtester:
                     )
                     state.positions.pop(symbol, None)
                     position, best_price, entry_fee = None, None, Decimal(0)
-                else:
+                elif strategy.allocation != "full":
                     best_price = max(best_price or bar.close, bar.high)
                     atr = rows[i].get("atr14")
                     if atr:
@@ -221,6 +229,14 @@ class Backtester:
             if intent is None:
                 continue
             depth = self._reference_depth(bar)
+            if strategy.allocation == "full":
+                # Capital benchmark: hold the asset with the whole account, so the
+                # comparison is against the thing a person would actually do
+                # instead of trading.
+                qty = (cash / bar.close) * Decimal("0.999")  # leave room for fees
+                if qty > 0:
+                    pending, pending_qty = intent, qty
+                continue
             decision = self.risk.evaluate(state, intent, available_depth=depth)
             if decision.rejected:
                 rejections[decision.reason] = rejections.get(decision.reason, 0) + 1

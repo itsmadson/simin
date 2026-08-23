@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -23,10 +24,17 @@ from simin.exchanges.base import ExchangeAdapter, VenueError
 from simin.exchanges.paper import PaperAdapter
 from simin.exchanges.public_global import PublicGlobalAdapter
 from simin.exchanges.venues import profile
-from simin.features.engine import build_features
-from simin.features.regime import classify
+from simin.features.engine import FeatureRow, build_features
+from simin.features.regime import RegimeState, classify
 from simin.logging import configure_logging, get_logger
-from simin.risk.engine import AccountState, OpenPosition, RiskEngine, new_account, trailing_stop
+from simin.risk.engine import (
+    AccountState,
+    Intent,
+    OpenPosition,
+    RiskEngine,
+    new_account,
+    trailing_stop,
+)
 from simin.strategies import build as build_strategy
 from simin.strategies.base import Strategy, StrategyContext
 from simin.types import TF, OrderRequest, OrderType, RunMode, Side
@@ -92,7 +100,7 @@ class Trader:
             except VenueError as exc:
                 self.state.errors += 1
                 log.warning("trader.venue_error", error=str(exc))
-            except Exception as exc:  # noqa: BLE001 - loop must not die silently
+            except Exception as exc:
                 self.state.errors += 1
                 self.state.account.trip(f"unhandled exception: {exc!r}")
                 log.exception("trader.unhandled", error=str(exc))
@@ -177,7 +185,13 @@ class Trader:
             return
 
     async def _manage_open_position(
-        self, symbol: str, position: OpenPosition | None, rows, index, regime, price
+        self,
+        symbol: str,
+        position: OpenPosition | None,
+        rows: Sequence[FeatureRow],
+        index: int,
+        regime: RegimeState,
+        price: Decimal,
     ) -> None:
         if position is None:
             return
@@ -196,7 +210,9 @@ class Trader:
         if stop_hit:
             await self._close(symbol, position, reason="stop")
 
-    async def _submit(self, symbol, direction, qty, intent, strategy_name) -> None:
+    async def _submit(
+        self, symbol: str, direction: int, qty: Decimal, intent: Intent, strategy_name: str
+    ) -> None:
         side = Side.BUY if direction > 0 else Side.SELL
         req = OrderRequest(
             symbol=symbol, side=side, type=OrderType.MARKET, qty=qty,

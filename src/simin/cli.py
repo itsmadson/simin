@@ -11,16 +11,15 @@ import argparse
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-from simin.config import get_settings
+from simin.config import RiskProfile, get_settings, limits_for
 from simin.data.ingest import backfill
 from simin.data.quality import check_bars
 from simin.db.repo import Repo, make_engine
 from simin.exchanges.public_global import PublicGlobalAdapter
 from simin.exchanges.venues import PROFILES, profile
-from simin.config import RiskProfile, limits_for
+from simin.logging import configure_logging, get_logger
 from simin.research import run_research
 from simin.risk.engine import RiskEngine
-from simin.logging import configure_logging, get_logger
 from simin.types import TF
 
 log = get_logger(__name__)

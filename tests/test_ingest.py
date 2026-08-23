@@ -116,3 +116,72 @@ def test_stale_by_detects_a_dead_feed():
     assert stale_by(bars, fresh, TF.H1) == timedelta(0)
     assert stale_by(bars, fresh + timedelta(hours=3), TF.H1) == timedelta(hours=3)
     assert stale_by([], fresh, TF.H1) == timedelta.max
+
+
+class RangeRepo(FakeRepo):
+    """FakeRepo that also reports its oldest stored bar, like the real repo."""
+
+    async def stored_range(self, symbol_id: int, tf: TF):
+        keys = [k[2] for k in self.rows if k[0] == symbol_id and k[1] == tf.value]
+        return (min(keys), max(keys)) if keys else (None, None)
+
+
+def test_backfill_extends_history_backwards_when_asked_for_an_earlier_start():
+    """Regression: asking for earlier history than is stored used to store nothing.
+
+    Found by loading real Binance data twice with different --start values: the
+    second run reported success and wrote zero rows, leaving the series starting
+    years later than requested.
+    """
+    bars = series(400)
+    repo = RangeRepo()
+    late = dict(symbol_id=1, symbol="BTCUSDT", tf=TF.H1, page_limit=100)
+
+    # first load covers only the recent half
+    asyncio.run(
+        backfill(_adapter(bars), repo, start=bars[200].ts, end=bars[-1].close_time, **late)
+    )
+    assert len(repo.rows) == 200
+
+    # now ask for the full history
+    result = asyncio.run(
+        backfill(_adapter(bars), repo, start=bars[0].ts, end=bars[-1].close_time, **late)
+    )
+    assert len(repo.rows) == 400, "earlier history was not filled in"
+    assert result.fetched == 200
+    stored_ts = sorted(k[2] for k in repo.rows)
+    assert stored_ts[0] == bars[0].ts
+
+
+def test_backfill_fills_both_ends_in_one_pass():
+    bars = series(300)
+    repo = RangeRepo()
+    middle = bars[100:200]
+    asyncio.run(repo.insert_bars(1, middle))
+
+    asyncio.run(
+        backfill(
+            _adapter(bars), repo, symbol_id=1, symbol="BTCUSDT", tf=TF.H1,
+            start=bars[0].ts, end=bars[-1].close_time, page_limit=100,
+        )
+    )
+    assert len(repo.rows) == 300
+
+
+def test_backfill_without_stored_range_support_still_resumes_forward():
+    """Older repo objects that only expose last_bar_ts keep working."""
+    bars = series(200)
+    repo = FakeRepo()
+    asyncio.run(
+        backfill(
+            _adapter(bars[:100]), repo, symbol_id=1, symbol="BTCUSDT", tf=TF.H1,
+            start=bars[0].ts, end=bars[99].close_time, page_limit=50,
+        )
+    )
+    asyncio.run(
+        backfill(
+            _adapter(bars), repo, symbol_id=1, symbol="BTCUSDT", tf=TF.H1,
+            start=bars[0].ts, end=bars[-1].close_time, page_limit=50,
+        )
+    )
+    assert len(repo.rows) == 200

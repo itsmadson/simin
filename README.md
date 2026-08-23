@@ -24,22 +24,68 @@ This repository ships **no credentials and no adapters to designated venues**. T
 ## Quick start
 
 ```bash
-cp .env.example .env
-docker compose up -d postgres redis api
-open http://localhost:8000                       # bilingual dashboard (fa/en, RTL)
-
-# what a target actually costs, computed from the live cost model
-docker compose run --rm api python -m simin.cli target --monthly-pct 200
-
-# load history, then run the full honest pipeline
-docker compose run --rm api python -m simin.cli backfill --symbols BTCUSDT --start 2021-01-01
-docker compose run --rm api python -m simin.cli research --symbol BTCUSDT --symbol-id 1 \
-    --timeframe 4h --strategy trend_follow --start 2021-01-01
+docker compose up -d
 ```
 
-`simin research` prints in-sample, out-of-sample and 2×-cost results, every benchmark, every
-walk-forward window, a Monte Carlo distribution, and the 12-gate verdict. It exits non-zero
-unless every gate passes.
+That is the whole setup. It starts Postgres and Redis, creates the schema, downloads real
+market history, launches the API and dashboard on <http://localhost:8000>, and starts paper
+trading against live data. No `.env` is required — every setting has a working default, and
+paper mode cannot place a real order.
+
+Useful overrides:
+
+```bash
+SIMIN_API_PORT=8010 docker compose up -d              # port 8000 already taken
+SIMIN_BOOTSTRAP_SYMBOLS="BTCUSDT ETHUSDT" \
+SIMIN_BOOTSTRAP_START=2020-01-01 docker compose up -d  # different history
+SIMIN_PG_IMAGE=timescale/timescaledb:latest-pg16 docker compose up -d   # hypertables
+docker compose build --build-arg PIP_INDEX_URL=<mirror>  # if pypi.org is unreachable
+```
+
+TimescaleDB is used when the image provides it and skipped when it does not; the schema and
+results are identical either way.
+
+Then run the research pipeline:
+
+```bash
+docker compose exec api python -m simin.cli research \
+  --symbol BTCUSDT --symbol-id 1 --timeframe 4h --strategy trend_follow --start 2022-01-01
+```
+
+It prints in-sample, out-of-sample and 2×-cost results, every benchmark, every walk-forward
+window, a Monte Carlo distribution, and the 12-gate verdict — and exits non-zero unless every
+gate passes.
+
+## Real results (not a simulation of results)
+
+Binance spot, 2022-01-01 → 2026-08-23, 4h bars, aggressive risk profile, Iranian-venue cost
+model (~1.1% round trip). 152,000+ real bars loaded through the pipeline.
+
+| Symbol | Strategy | Trades | Return | Sharpe | MaxDD | Fees as % of gross |
+|---|---|---:|---:|---:|---:|---:|
+| BTC | buy_and_hold | — | **+62.6%** | 0.46 | −67.2% | 0% |
+| BTC | donchian_breakout | 21 | +7.0% | 0.41 | −6.1% | 19% |
+| BTC | trend_follow | 93 | −9.5% | −0.34 | −14.9% | 31% |
+| BTC | rsi_oversold | 19 | −12.5% | −1.23 | −12.5% | **159%** |
+| BTC | range_mean_reversion | 101 | −24.3% | −1.69 | −25.1% | 73% |
+| ETH | buy_and_hold | — | −34.8% | 0.19 | −76.2% | 0% |
+| ETH | best strategy (donchian) | 20 | −2.0% | −0.12 | −6.5% | 27% |
+| SOL | buy_and_hold | — | −45.4% | 0.33 | −95.1% | 0% |
+| SOL | best strategy (vol_breakout) | 2 | +3.0% | 0.93 | −0.6% | 2% |
+
+**What this says, plainly:**
+
+1. **No strategy here beat buying and holding BTC.** The best one made 7% while BTC made 62%.
+2. **Fees ate everything.** Textbook RSI paid 159% of its gross profit in fees — it made money
+   before costs and lost money after. That is the entire story of most retail bots.
+3. **The strategies did protect capital.** Buy-and-hold survived a −67% (BTC), −76% (ETH) and
+   −95% (SOL) drawdown. The systematic strategies stayed under −25%. Losing less is worth more
+   than it sounds.
+4. `simin research` on BTC 4h returns **NO-GO**: 38% walk-forward consistency, deflated Sharpe
+   0.14, negative at 2× cost. The system correctly refuses to green-light itself.
+
+Nothing here is tuned. That is deliberate — these are the honest baseline numbers a real edge
+would have to beat, and publishing them first is what makes any later improvement believable.
 
 ## What is built
 
@@ -67,7 +113,7 @@ unless every gate passes.
 | [06 — Deployment](docs/06-deployment.md) | run it, operate it, and what going live actually requires |
 
 ## Planned stack
-Python 3.12 · FastAPI · Polars · PostgreSQL + TimescaleDB · Redis · Arq · LightGBM · Optuna · MLflow · Next.js + TypeScript + Tailwind + TradingView Lightweight Charts · Docker Compose.
+Python 3.12+ · FastAPI · NumPy · PostgreSQL (TimescaleDB optional) · Redis · Docker Compose. Optional research extras: LightGBM, scikit-learn, Optuna, Polars. The dashboard is a self-contained page with no build step and no external requests.
 
 ## License
 MIT

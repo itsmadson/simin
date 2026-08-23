@@ -56,12 +56,12 @@ Processes (each its own container, so one crash never takes the trader with it):
 | Layer | Choice | Why (and what was rejected) |
 |---|---|---|
 | Language | Python 3.12, fully typed, `mypy --strict` on core | ecosystem wins; latency isn't the edge at 1h–4h |
-| Data frames | **Polars** for research/backtest, pandas only at boundaries | 5–20× faster on the feature pipeline; lazy engine catches schema errors early |
+| Data frames | **None in the core**: pure Python + NumPy. Polars is an optional research extra | The feature engine works on plain sequences so the domain has no heavy dependency and runs anywhere; Polars earns its place only once feature computation becomes the bottleneck |
 | API | FastAPI + Pydantic v2 | typed contracts shared with TS via generated OpenAPI |
 | Storage | **PostgreSQL + TimescaleDB** hypertables + continuous aggregates | best fit for OHLCV/trades; compression on old chunks; SQL for research. Rejected InfluxDB (weaker joins), ClickHouse (great, but ops overhead for one user) |
 | Cold data | Parquet (partitioned by symbol/date), local or S3-compatible | fast research reads, cheap archive |
 | Cache/bus | Redis (streams + pubsub + locks) | one dependency doing hot state, leader lock, and fan-out |
-| Jobs | **Arq** (async, Redis-native) over Celery | lighter, async-first, fewer moving parts |
+| Jobs | none yet; the trader loop is a single async process | a queue is not needed until multiple symbols exceed one loop's budget. Redis is provisioned for the leader lock |
 | ML | scikit-learn, **LightGBM**, Optuna, MLflow | see research doc |
 | DL (later) | PyTorch | phase 7 only |
 | Migrations | Alembic | |

@@ -140,7 +140,18 @@ class Repo:
         sql = text("SELECT max(ts) FROM ohlcv WHERE symbol_id = :s AND tf = :tf")
         async with self._engine.connect() as conn:
             row = (await conn.execute(sql, {"s": symbol_id, "tf": tf.value})).one()
-        return row[0]
+        value: datetime | None = row[0]
+        return value
+
+    async def stored_range(self, symbol_id: int, tf: TF) -> tuple[datetime | None, datetime | None]:
+        """Oldest and newest stored bar. Both ends matter: resuming only from the
+        newest would leave a request for *earlier* history silently unfulfilled."""
+        sql = text("SELECT min(ts), max(ts) FROM ohlcv WHERE symbol_id = :s AND tf = :tf")
+        async with self._engine.connect() as conn:
+            row = (await conn.execute(sql, {"s": symbol_id, "tf": tf.value})).one()
+        oldest: datetime | None = row[0]
+        newest: datetime | None = row[1]
+        return oldest, newest
 
     async def log_quality(
         self, symbol_id: int, tf: TF, n_bars: int, issues: list[dict[str, Any]]
