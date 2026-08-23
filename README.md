@@ -56,6 +56,34 @@ It prints in-sample, out-of-sample and 2×-cost results, every benchmark, every 
 window, a Monte Carlo distribution, and the 12-gate verdict — and exits non-zero unless every
 gate passes.
 
+## The app
+
+`docker compose up -d`, then <http://localhost:8000>.
+
+**LAB vs REAL.** The mode badge is always visible in the header. LAB covers backtest and paper
+trading; REAL is locked and cannot be unlocked from the UI — see the Go Live page for the
+twelve gates and the Wallet page for what connecting real funds actually requires.
+
+| Page | What it is for |
+|---|---|
+| **Overview** | equity, drawdown, realized/unrealized PnL, fees, equity curve, live activity feed |
+| **Positions** | open and closed tabs, entry, stop, strategy, regime, realized PnL |
+| **Signals & Orders** | every signal a strategy produced and every order that followed, including rejections and why |
+| **Market** | current regime per symbol with the features behind it, and whether trading is permitted |
+| **Performance** | PnL by strategy, by symbol, by regime |
+| **Lab** | run a backtest from the browser: pick symbol, timeframe, strategy, risk profile, 1× or 2× cost, regime filter on/off. Returns the full metric set and every benchmark side by side. Read-only — the Lab cannot open a position |
+| **Data** | stored history coverage per symbol and timeframe |
+| **Wallet** | set the paper balance; see venue costs; see exactly what real-money connection requires |
+| **Go Live** | the 12 gates with live evidence, plus the target reality check |
+| **Settings** | risk profile, active risk limits, data source |
+
+**On connecting real money.** The Wallet page shows the status of a real venue connection but
+does not accept credentials, by design. Keys arrive through the environment or a Docker
+secret, never through a web form and never into the database — an endpoint that accepts a
+withdrawal-capable key is a liability, not a feature. The repository also ships no adapter for
+any sanctioned venue (see [`docs/04`](docs/04-exchanges-iran.md)); that adapter is an
+operator-installed plugin.
+
 ## Real results (not a simulation of results)
 
 Binance spot, 2022-01-01 → 2026-08-23, 4h bars, aggressive risk profile, Iranian-venue cost
@@ -99,7 +127,8 @@ would have to beat, and publishing them first is what makes any later improvemen
 | ML | triple-barrier labels, purged/embargoed CV, PBO, logistic baseline + LightGBM, calibration |
 | Validation | walk-forward, Monte Carlo, deflated Sharpe, 12 Go/No-Go gates |
 | Paper trading | paper adapter with idempotent orders + partial fills, single-leader trader loop |
-| Dashboard | FastAPI + self-contained bilingual UI, kill switch, live target reality check |
+| Dashboard | 10-page app: sidebar nav, Overview, Positions, Signals & Orders, Market, Performance, Lab, Data, Wallet, Go Live, Settings — bilingual fa/en with full RTL, no build step, no external requests |
+| Session records | Every signal, order, fill, position, equity mark and risk event is written to Postgres, so the UI shows what happened rather than a reconstruction |
 
 ## Documentation
 
