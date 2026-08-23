@@ -3,7 +3,7 @@
 **An open-source, research-first adaptive crypto trading platform.**
 Backtest → Paper → (gated) Live. Persian & English. Honest about what works.
 
-> **Status: Phase 1 — research & architecture.** No trading code yet. Read the docs before expecting profits.
+> **Status: phases 0–11 implemented.** Data engine, feature/regime engine, event-driven backtester, risk engine, meta-labeling ML, walk-forward + Monte Carlo, Go/No-Go gates, paper trading, dashboard. 208 tests. Live trading is disabled and gated.
 
 ---
 
@@ -21,6 +21,40 @@ On 2026-06-02, OFAC designated Nobitex, Wallex, Bitpin and Ramzinex to the SDN l
 
 This repository ships **no credentials and no adapters to designated venues**. The core is venue-agnostic; it includes a paper adapter, a backtest replay adapter, and read-only public market-data adapters. Anyone operating this software is responsible for complying with the laws that apply to them. Simin contains no functionality intended to evade sanctions or compliance controls, and pull requests adding such functionality will be rejected.
 
+## Quick start
+
+```bash
+cp .env.example .env
+docker compose up -d postgres redis api
+open http://localhost:8000                       # bilingual dashboard (fa/en, RTL)
+
+# what a target actually costs, computed from the live cost model
+docker compose run --rm api python -m simin.cli target --monthly-pct 200
+
+# load history, then run the full honest pipeline
+docker compose run --rm api python -m simin.cli backfill --symbols BTCUSDT --start 2021-01-01
+docker compose run --rm api python -m simin.cli research --symbol BTCUSDT --symbol-id 1 \
+    --timeframe 4h --strategy trend_follow --start 2021-01-01
+```
+
+`simin research` prints in-sample, out-of-sample and 2×-cost results, every benchmark, every
+walk-forward window, a Monte Carlo distribution, and the 12-gate verdict. It exits non-zero
+unless every gate passes.
+
+## What is built
+
+| Area | Status |
+|---|---|
+| Domain types, data quality, backfill | Timescale schema, idempotent resumable backfill, gap/staleness detection |
+| Feature + regime engine | ~20 causal features, strict as-of multi-timeframe join, regime state machine + playbook |
+| Backtester | event-driven, T+1 fills, spread + sqrt impact + latency, stop-before-target, depth-capped sizing |
+| Risk engine | vol-scaled sizing, drawdown throttles, correlated-beta cap, venue cap, latching circuit breakers |
+| Strategies | 4 strategies + 4 benchmarks incl. random-entry (isolates signal from sizing) |
+| ML | triple-barrier labels, purged/embargoed CV, PBO, logistic baseline + LightGBM, calibration |
+| Validation | walk-forward, Monte Carlo, deflated Sharpe, 12 Go/No-Go gates |
+| Paper trading | paper adapter with idempotent orders + partial fills, single-leader trader loop |
+| Dashboard | FastAPI + self-contained bilingual UI, kill switch, live target reality check |
+
 ## Documentation
 
 | Doc | Contents |
@@ -30,6 +64,7 @@ This repository ships **no credentials and no adapters to designated venues**. T
 | [03 — Risk & Validation](docs/03-risk-and-validation.md) | risk engine, backtest anti-bias rules, walk-forward, Monte Carlo, **Go/No-Go gates** |
 | [04 — Iranian Exchanges](docs/04-exchanges-iran.md) | API/WS/fee/limit comparison table, sanctions impact, arbitrage reality check |
 | [05 — Roadmap](docs/05-roadmap.md) | 12 phases with hard exit criteria |
+| [06 — Deployment](docs/06-deployment.md) | run it, operate it, and what going live actually requires |
 
 ## Planned stack
 Python 3.12 · FastAPI · Polars · PostgreSQL + TimescaleDB · Redis · Arq · LightGBM · Optuna · MLflow · Next.js + TypeScript + Tailwind + TradingView Lightweight Charts · Docker Compose.

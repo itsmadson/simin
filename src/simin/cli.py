@@ -17,6 +17,9 @@ from simin.data.quality import check_bars
 from simin.db.repo import Repo, make_engine
 from simin.exchanges.public_global import PublicGlobalAdapter
 from simin.exchanges.venues import PROFILES, profile
+from simin.config import RiskProfile, limits_for
+from simin.research import run_research
+from simin.risk.engine import RiskEngine
 from simin.logging import configure_logging, get_logger
 from simin.types import TF
 
@@ -125,6 +128,61 @@ def _cmd_target(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _cmd_research(args: argparse.Namespace) -> int:
+    """Full research pipeline on stored history: benchmarks, walk-forward, gates."""
+    settings = get_settings()
+    engine = make_engine(settings.pg_dsn)
+    repo = Repo(engine)
+    tf = TF.parse(args.timeframe)
+    try:
+        bars = await repo.get_bars(
+            args.symbol_id, args.symbol, tf,
+            _parse_date(args.start),
+            _parse_date(args.end) if args.end else datetime.now(UTC),
+        )
+    finally:
+        await engine.dispose()
+
+    if len(bars) < args.train_bars + args.test_bars:
+        print(
+            f"not enough history: {len(bars)} bars, need at least "
+            f"{args.train_bars + args.test_bars}. Run `simin backfill` first."
+        )
+        return 1
+
+    report = run_research(
+        bars,
+        args.strategy,
+        risk=RiskEngine(limits_for(RiskProfile(args.risk_profile))),
+        n_trials=args.trials,
+        train_bars=args.train_bars,
+        test_bars=args.test_bars,
+    )
+    print(report.render())
+    return 0 if report.gates.passed else 1
+
+
+def _cmd_gates(_args: argparse.Namespace) -> int:
+    """Print the Go/No-Go checklist without running anything."""
+    from simin.validation.gates import evaluate_gates
+
+    report = evaluate_gates(
+        walk_forward=type("_", (), {"consistency": 0.0, "worst_window": 0.0})(),
+        out_of_sample=type(
+            "_", (), {"deflated_sharpe": 0.0, "total_return": 0.0, "max_drawdown": 0.0,
+                      "n_trades": 0}
+        )(),
+        monte_carlo=type("_", (), {"probability_of_ruin": 1.0, "p95_max_drawdown": 0.0})(),
+        stressed_cost_return=0.0,
+        benchmark_returns={},
+        paper=None,
+        human_approved=False,
+    )
+    print(report.render())
+    print("\nThis is the empty checklist. Run `simin research` to fill it in.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="simin", description="Simin trading platform CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -152,6 +210,24 @@ def build_parser() -> argparse.ArgumentParser:
     tg.add_argument("--monthly-pct", type=float, default=200.0)
     tg.add_argument("--trades-per-month", type=int, default=60)
     tg.set_defaults(func=_cmd_target)
+
+    rs = sub.add_parser("research", help="backtest + benchmarks + walk-forward + gates")
+    rs.add_argument("--symbol", required=True)
+    rs.add_argument("--symbol-id", type=int, required=True)
+    rs.add_argument("--timeframe", default="4h")
+    rs.add_argument("--strategy", default="trend_follow")
+    rs.add_argument("--risk-profile", default="balanced",
+                    choices=[p.value for p in RiskProfile])
+    rs.add_argument("--start", required=True)
+    rs.add_argument("--end", default=None)
+    rs.add_argument("--train-bars", type=int, default=2000)
+    rs.add_argument("--test-bars", type=int, default=500)
+    rs.add_argument("--trials", type=int, default=1,
+                    help="how many variants were tried; deflates the Sharpe honestly")
+    rs.set_defaults(func=lambda a: asyncio.run(_cmd_research(a)))
+
+    gt = sub.add_parser("gates", help="show the Go/No-Go checklist")
+    gt.set_defaults(func=_cmd_gates)
     return parser
 
 

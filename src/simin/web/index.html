@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simin · سیمین</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #141b23; --line: #223040; --text: #e6edf3;
+    --muted: #8b9bb0; --good: #3fb950; --bad: #f85149; --warn: #d29922; --accent: #58a6ff;
+    --font: ui-sans-serif, system-ui, "Segoe UI", Vazirmatn, Tahoma, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+           padding: 1rem 1.5rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  h1 { font-size: 1.1rem; margin: 0; letter-spacing: .02em; }
+  h2 { font-size: .8rem; margin: 0 0 .75rem; color: var(--muted);
+       text-transform: uppercase; letter-spacing: .08em; }
+  .pill { font-size: .72rem; padding: .2rem .6rem; border-radius: 999px;
+          border: 1px solid var(--line); color: var(--muted); }
+  .pill.live { color: var(--bad); border-color: var(--bad); }
+  .pill.paper { color: var(--accent); border-color: var(--accent); }
+  main { padding: 1.5rem; display: grid; gap: 1rem;
+         grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  section { background: var(--panel); border: 1px solid var(--line);
+            border-radius: 10px; padding: 1rem 1.15rem; }
+  section.wide { grid-column: 1 / -1; }
+  table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  th, td { text-align: left; padding: .38rem .3rem; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .big { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); font-size: .8rem; line-height: 1.5; }
+  .good { color: var(--good); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  button { background: transparent; color: var(--text); border: 1px solid var(--line);
+           border-radius: 6px; padding: .4rem .8rem; cursor: pointer; font-family: var(--font); }
+  button:hover { border-color: var(--accent); }
+  button.danger { border-color: var(--bad); color: var(--bad); }
+  input, select { background: var(--bg); color: var(--text); border: 1px solid var(--line);
+                  border-radius: 6px; padding: .35rem .5rem; font-family: var(--font); width: 6.5rem; }
+  .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-bottom: .6rem; }
+  .gate { display: flex; gap: .6rem; align-items: baseline; font-size: .82rem; padding: .25rem 0; }
+  .gate .n { color: var(--muted); width: 1.6rem; text-align: right; }
+  .gate .req { color: var(--muted); margin-inline-start: auto; font-size: .75rem; }
+  html[dir="rtl"] body { font-family: Vazirmatn, Tahoma, var(--font); }
+  html[dir="rtl"] th, html[dir="rtl"] td { text-align: right; }
+  html[dir="rtl"] td.num, html[dir="rtl"] th.num { text-align: left; }
+  footer { padding: 1rem 1.5rem 2rem; color: var(--muted); font-size: .75rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1 data-i18n="title">Simin · سیمین</h1>
+  <div class="row" style="margin:0">
+    <span class="pill" id="mode-pill">…</span>
+    <span class="pill" id="profile-pill">…</span>
+    <button id="lang-toggle">فارسی</button>
+    <button class="danger" id="kill" data-i18n="kill">Kill switch</button>
+  </div>
+</header>
+
+<main>
+  <section>
+    <h2 data-i18n="portfolio">Portfolio</h2>
+    <div class="big" id="equity">—</div>
+    <div class="muted" id="equity-note"></div>
+    <table style="margin-top:.8rem">
+      <tbody id="portfolio-rows"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2 data-i18n="costs">Cost floor</h2>
+    <table><thead><tr>
+      <th data-i18n="venue">Venue</th><th class="num">maker</th>
+      <th class="num">taker</th><th class="num" data-i18n="roundtrip">round trip</th>
+    </tr></thead><tbody id="cost-rows"></tbody></table>
+    <p class="muted" id="cost-note"></p>
+  </section>
+
+  <section>
+    <h2 data-i18n="feasibility">Target reality check</h2>
+    <div class="row">
+      <label class="muted" data-i18n="monthly">Monthly %</label>
+      <input id="monthly" type="number" value="200" step="1">
+      <label class="muted" data-i18n="trades">Trades/mo</label>
+      <input id="trades" type="number" value="60" step="1">
+      <button id="calc" data-i18n="calc">Compute</button>
+    </div>
+    <table><tbody id="feas-rows"></tbody></table>
+    <p class="muted" id="verdict"></p>
+  </section>
+
+  <section class="wide">
+    <h2 data-i18n="gates">Go / No-Go gates for live trading</h2>
+    <div id="gate-list"></div>
+    <p class="muted" data-i18n="gatesNote"></p>
+  </section>
+
+  <section class="wide">
+    <h2 data-i18n="equityCurve">Equity curve</h2>
+    <canvas id="equity-chart" height="180"></canvas>
+    <p class="muted" data-i18n="noRun"></p>
+  </section>
+</main>
+
+<footer id="footer"></footer>
+
+<script>
+const I18N = {
+  en: {
+    dir: "ltr", toggle: "فارسی", title: "Simin · سیمین",
+    portfolio: "Portfolio", costs: "Cost floor", venue: "Venue", roundtrip: "round trip",
+    feasibility: "Target reality check", monthly: "Monthly %", trades: "Trades/mo",
+    calc: "Compute", gates: "Go / No-Go gates for live trading",
+    equityCurve: "Equity curve", kill: "Kill switch",
+    gatesNote: "Live trading stays disabled until every gate is green and a human signs off. It then starts at 2% of intended capital.",
+    noRun: "No trading session attached. Start the trader service, or run `simin research` for backtested curves.",
+    equityNote: "Equity is reported in both IRT and USDT: a Toman-only figure cannot separate trading skill from rial devaluation.",
+    balance: "Balance (IRT)", equityUsdt: "Equity (USDT)", unrealized: "Unrealized PnL",
+    drawdown: "Drawdown", positions: "Open positions",
+    annual: "Compounded per year", netEdge: "Net edge needed per trade",
+    grossEdge: "Gross edge needed per trade", costShare: "Cost share of gross",
+    maxTrades: "Max trades before costs dominate",
+    footer: "Simin is research software. It does not predict prices, and no configuration of it makes 200%/month achievable. Not financial advice."
+  },
+  fa: {
+    dir: "rtl", toggle: "English", title: "سیمین · Simin",
+    portfolio: "پرتفوی", costs: "کف هزینه", venue: "صرافی", roundtrip: "رفت‌وبرگشت",
+    feasibility: "بررسی واقع‌بینانه هدف", monthly: "درصد ماهانه", trades: "معامله در ماه",
+    calc: "محاسبه", gates: "دروازه‌های ورود به معاملات واقعی",
+    equityCurve: "نمودار سرمایه", kill: "توقف اضطراری",
+    gatesNote: "تا زمانی که همه دروازه‌ها سبز نشوند و تأیید انسانی ثبت نشود، معامله واقعی غیرفعال می‌ماند و سپس با ۲٪ سرمایه آغاز می‌شود.",
+    noRun: "جلسه معاملاتی متصل نیست. سرویس trader را اجرا کنید یا با `simin research` نتایج بک‌تست بگیرید.",
+    equityNote: "سرمایه هم به تومان و هم به تتر گزارش می‌شود: عدد صرفاً تومانی نمی‌تواند مهارت معاملاتی را از کاهش ارزش ریال جدا کند.",
+    balance: "موجودی (تومان)", equityUsdt: "سرمایه (تتر)", unrealized: "سود/زیان باز",
+    drawdown: "افت سرمایه", positions: "پوزیشن‌های باز",
+    annual: "بازده مرکب سالانه", netEdge: "برتری خالص لازم در هر معامله",
+    grossEdge: "برتری ناخالص لازم در هر معامله", costShare: "سهم هزینه از ناخالص",
+    maxTrades: "بیشترین تعداد معامله پیش از غلبه هزینه",
+    footer: "سیمین یک نرم‌افزار پژوهشی است. قیمت را پیش‌بینی نمی‌کند و هیچ تنظیماتی آن را به بازده ۲۰۰٪ ماهانه نمی‌رساند. این توصیه مالی نیست."
+  }
+};
+
+let lang = localStorage.getItem("simin-lang") || "en";
+const t = (k) => I18N[lang][k] ?? k;
+const pct = (v) => (v * 100).toFixed(2) + "%";
+const fmt = (v) => new Intl.NumberFormat(lang === "fa" ? "fa-IR" : "en-US").format(v);
+
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.documentElement.dir = I18N[lang].dir;
+  document.getElementById("lang-toggle").textContent = t("toggle");
+  document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  document.getElementById("equity-note").textContent = t("equityNote");
+  document.getElementById("footer").textContent = t("footer");
+  localStorage.setItem("simin-lang", lang);
+  refresh();
+}
+
+async function api(path) {
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(path + " -> " + res.status);
+  return res.json();
+}
+
+async function refresh() {
+  try {
+    const health = await api("/health");
+    const modePill = document.getElementById("mode-pill");
+    modePill.textContent = health.mode.toUpperCase();
+    modePill.className = "pill " + (health.mode === "live" ? "live" : "paper");
+    document.getElementById("profile-pill").textContent = health.risk_profile;
+  } catch (e) { console.error(e); }
+
+  try {
+    const p = await api("/portfolio");
+    document.getElementById("equity").textContent = fmt(Number(p.equity_irt)) + " IRT";
+    const rows = [
+      [t("balance"), fmt(Number(p.balance_irt))],
+      [t("equityUsdt"), p.equity_usdt ?? "—"],
+      [t("unrealized"), p.unrealized_pnl],
+      [t("drawdown"), p.drawdown],
+      [t("positions"), String(p.positions.length)],
+    ];
+    document.getElementById("portfolio-rows").innerHTML = rows
+      .map(([k, v]) => `<tr><td>${k}</td><td class="num">${v}</td></tr>`).join("");
+  } catch (e) { console.error(e); }
+
+  try {
+    const c = await api("/costs");
+    document.getElementById("cost-rows").innerHTML = c.venues.map((v) => `
+      <tr><td>${v.display}</td>
+      <td class="num">${pct(Number(v.maker))}</td>
+      <td class="num">${pct(Number(v.taker))}</td>
+      <td class="num warn">${pct(Number(v.round_trip_cost))}</td></tr>`).join("");
+    document.getElementById("cost-note").textContent = c.note;
+  } catch (e) { console.error(e); }
+
+  try {
+    const g = await api("/gates");
+    document.getElementById("gate-list").innerHTML = g.gates.map((gate) => `
+      <div class="gate"><span class="n">${gate.n}.</span>
+      <span>${gate.name}</span><span class="req">${gate.required}</span></div>`).join("");
+  } catch (e) { console.error(e); }
+
+  computeFeasibility();
+  drawEquity([]);
+}
+
+async function computeFeasibility() {
+  const monthly = document.getElementById("monthly").value;
+  const trades = document.getElementById("trades").value;
+  try {
+    const f = await api(`/feasibility?monthly_pct=${monthly}&trades_per_month=${trades}`);
+    const rows = [
+      [t("annual"), fmt(Math.round(f.annual_multiple)) + "×"],
+      [t("netEdge"), pct(f.net_edge_per_trade)],
+      [t("grossEdge"), pct(f.gross_edge_per_trade)],
+      [t("costShare"), pct(f.cost_share_of_gross)],
+      [t("maxTrades"), fmt(f.max_trades_before_costs_dominate)],
+    ];
+    document.getElementById("feas-rows").innerHTML = rows
+      .map(([k, v]) => `<tr><td>${k}</td><td class="num">${v}</td></tr>`).join("");
+    const verdict = document.getElementById("verdict");
+    verdict.textContent = f.verdict;
+    verdict.className = "muted " + (f.verdict === "plausible" ? "good" : "bad");
+  } catch (e) { console.error(e); }
+}
+
+function drawEquity(series) {
+  const canvas = document.getElementById("equity-chart");
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width = canvas.clientWidth * devicePixelRatio;
+  const h = canvas.height = 180 * devicePixelRatio;
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = "#223040"; ctx.lineWidth = devicePixelRatio;
+  ctx.beginPath(); ctx.moveTo(0, h - 1); ctx.lineTo(w, h - 1); ctx.stroke();
+  if (!series.length) return;
+  const min = Math.min(...series), max = Math.max(...series), span = max - min || 1;
+  ctx.strokeStyle = "#58a6ff"; ctx.lineWidth = 2 * devicePixelRatio;
+  ctx.beginPath();
+  series.forEach((v, i) => {
+    const x = (i / (series.length - 1)) * w;
+    const y = h - ((v - min) / span) * (h - 10) - 5;
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  });
+  ctx.stroke();
+}
+
+document.getElementById("lang-toggle").onclick = () => { lang = lang === "en" ? "fa" : "en"; applyLang(); };
+document.getElementById("calc").onclick = computeFeasibility;
+document.getElementById("kill").onclick = async () => {
+  await fetch("/kill-switch?reason=dashboard", { method: "POST" });
+  refresh();
+};
+applyLang();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>
