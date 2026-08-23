@@ -27,7 +27,7 @@ A signal must have expected edge > round-trip cost to be tradeable at all. This 
 
 ### 0.3 +200%/month is not an achievable target — it is a ruin generator
 
-200%/month compounded = **~1,594,000% per year (≈16,000×)**. No fund, prop desk or public track record has ever sustained anything within two orders of magnitude of that. To reach it you need either:
+200%/month compounded = **531,441× per year (+53,144,000%)**. No fund, prop desk or public track record has ever sustained anything within two orders of magnitude of that. To reach it you need either:
 - ~2% edge per trade at ~60 trades/month with zero drawdown clustering (edge that large does not exist net of the 0.5–1.2% costs above), or
 - leverage high enough that a single 15% adverse move liquidates the account.
 

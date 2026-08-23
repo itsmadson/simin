@@ -1,0 +1,60 @@
+name: simin
+
+x-app: &app
+  build: .
+  env_file: .env
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_started }
+  volumes:
+    - ./src:/app/src:ro
+    - simin-data:/data
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: simin
+      POSTGRES_PASSWORD: simin
+      POSTGRES_DB: simin
+    volumes:
+      - simin-pg:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U simin"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports: ["5432:5432"]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [simin-redis:/data]
+    ports: ["6379:6379"]
+
+  api:
+    <<: *app
+    command: ["uvicorn", "simin.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports: ["8000:8000"]
+
+  ingestor:
+    <<: *app
+    command: ["python", "-m", "simin.cli", "backfill", "--symbols", "BTCUSDT", "ETHUSDT",
+              "--timeframes", "1h", "4h", "1d"]
+    restart: on-failure
+
+  # The trader is deliberately a single replica. Two trader processes would open
+  # two copies of every position; scale this service and you double your risk.
+  trader:
+    <<: *app
+    command: ["python", "-m", "simin.trader"]
+    deploy:
+      replicas: 0        # enabled in Phase 9, never on first boot
+    profiles: ["trading"]
+
+volumes:
+  simin-pg:
+  simin-redis:
+  simin-data:

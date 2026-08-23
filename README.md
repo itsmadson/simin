@@ -9,7 +9,7 @@ Backtest → Paper → (gated) Live. Persian & English. Honest about what works.
 
 ## Read this first (the honest part)
 
-- **Simin will not make you rich quickly.** A target of +200%/month compounds to ~16,000× per year. Nobody has ever done that sustainably. Chasing it requires leverage that guarantees eventual ruin. Simin treats that number as a hypothesis to test and expects to report it as unachievable. See [`docs/01-research.md` §0.3](docs/01-research.md).
+- **Simin will not make you rich quickly.** A target of +200%/month compounds to 531,441× per year. Nobody has ever done that sustainably. Chasing it requires leverage that guarantees eventual ruin. Simin treats that number as a hypothesis to test and expects to report it as unachievable. See [`docs/01-research.md` §0.3](docs/01-research.md).
 - **Most retail bots lose to fees and spread, not to bad indicators.** Round-trip cost on Iranian venues is ~0.5–1.2%. Every strategy is judged net of that, and again at 2× that.
 - **A Toman-denominated profit may be pure Rial devaluation, not trading skill.** Simin reports PnL in **both IRT and USDT** and benchmarks against simply holding USDT.
 - **If the ML adds nothing, it ships disabled** and the README says so. No fake AI.
@@ -50,7 +50,7 @@ MIT
 
 ## بخش صادقانه
 
-- **سیمین شما را سریع ثروتمند نمی‌کند.** هدف ۲۰۰٪ در ماه یعنی حدود ۱۶٬۰۰۰ برابر شدن سرمایه در یک سال. چنین چیزی هرگز به‌صورت پایدار محقق نشده و رسیدن به آن نیازمند اهرمی است که ورشکستگی را قطعی می‌کند. این عدد به‌عنوان یک فرضیه آزمایش می‌شود و به احتمال بسیار زیاد «غیرقابل دستیابی» گزارش خواهد شد.
+- **سیمین شما را سریع ثروتمند نمی‌کند.** هدف ۲۰۰٪ در ماه یعنی ۵۳۱٬۴۴۱ برابر شدن سرمایه در یک سال. چنین چیزی هرگز به‌صورت پایدار محقق نشده و رسیدن به آن نیازمند اهرمی است که ورشکستگی را قطعی می‌کند. این عدد به‌عنوان یک فرضیه آزمایش می‌شود و به احتمال بسیار زیاد «غیرقابل دستیابی» گزارش خواهد شد.
 - **بیشتر ربات‌های معاملاتی به‌خاطر کارمزد و اسپرد شکست می‌خورند، نه اندیکاتور بد.** هزینه رفت‌وبرگشت در صرافی‌های ایرانی حدود ۰٫۵ تا ۱٫۲ درصد است. هر استراتژی پس از کسر این هزینه و همچنین در حالت دو برابر هزینه ارزیابی می‌شود.
 - **سود تومانی ممکن است صرفاً کاهش ارزش ریال باشد، نه مهارت معاملاتی.** سیمین سود و زیان را هم به تومان و هم به تتر گزارش می‌کند و آن را با «صرفاً نگه‌داشتن تتر» مقایسه می‌کند.
 - **اگر هوش مصنوعی ارزش افزوده‌ای نداشته باشد، غیرفعال ارائه می‌شود** و همین در مستندات نوشته می‌شود. هوش مصنوعی تزئینی نداریم.
