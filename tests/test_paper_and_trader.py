@@ -1,6 +1,7 @@
 """Paper adapter and trader loop."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -11,6 +12,8 @@ from simin.config import RiskProfile, Settings, limits_for
 from simin.exchanges.base import OrderRejected
 from simin.exchanges.paper import PaperAdapter
 from simin.exchanges.replay import Clock, ReplayAdapter
+from simin.features.engine import build_features
+from simin.features.regime import classify
 from simin.risk.engine import RiskEngine
 from simin.strategies import build
 from simin.trader import Trader, TraderConfig
@@ -253,3 +256,29 @@ def test_conformance_catches_an_adapter_that_serves_unclosed_bars():
     report = run(check_market_data(adapter, "BTCUSDT", TF.H1, now=now))
     assert not report.passed
     assert any("unclosed" in c.name and not c.passed for c in report.checks)
+
+
+def test_live_config_matches_the_horizon_research():
+    """The trader must run the configuration the data supports, not a narrow one."""
+    config = TraderConfig()
+    assert len(config.symbols) >= 10, "breadth is where the trade frequency comes from"
+    assert set(config.strategies) == {"swing_momentum", "swing_pullback"}
+    assert config.max_hold_bars == 96      # 4 days on hourly bars
+
+
+def test_the_holding_ceiling_is_enforced_live_not_only_in_backtests():
+    from simin.risk.engine import OpenPosition
+
+    trader, adapter, _ = make_trader()
+    opened = datetime.now(UTC) - timedelta(hours=200)
+    position = OpenPosition(
+        symbol="BTCUSDT", direction=1, qty=Decimal("0.1"), entry=Decimal(100),
+        stop=Decimal(50), strategy="swing_momentum", opened_at=opened,
+    )
+    trader.state.account.positions["BTCUSDT"] = position
+    run(adapter.create_order(order(cid="seed", qty="0.1")))
+
+    rows = build_features(gbm_series(400, seed=2))
+    run(trader._manage_open_position("BTCUSDT", position, rows, len(rows) - 1,
+                                     classify(rows, len(rows) - 1), Decimal(100)))
+    assert "BTCUSDT" not in trader.state.account.positions

@@ -3,7 +3,6 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-import pytest
 from factories import gbm_series
 
 from simin.backtest.costs import CostModel

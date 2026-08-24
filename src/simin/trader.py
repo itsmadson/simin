@@ -47,13 +47,26 @@ log = get_logger(__name__)
 
 @dataclass(slots=True)
 class TraderConfig:
-    symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT")
+    """Live trading configuration.
+
+    The universe is wide and the strategies are the swing pair, because that is
+    what the horizon research concluded: entries arrive daily from breadth,
+    while each position still resolves inside the 4-day ceiling. A narrow
+    universe traded frequently is the configuration the data rules out.
+    """
+
+    symbols: tuple[str, ...] = (
+        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT",
+        "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "LTCUSDT", "ATOMUSDT",
+    )
     tf: TF = TF.H1
-    strategies: tuple[str, ...] = ("trend_follow", "donchian_breakout")
-    poll_seconds: float = 30.0
+    strategies: tuple[str, ...] = ("swing_momentum", "swing_pullback")
+    poll_seconds: float = 60.0
     history_bars: int = 500
     max_staleness: timedelta = timedelta(hours=2)
     quote_asset: str = "USDT"
+    #: Hard holding ceiling, in bars of ``tf``. 96 hourly bars = 4 days.
+    max_hold_bars: int = 96
 
 
 @dataclass(slots=True)
@@ -267,6 +280,13 @@ class Trader:
         stop_hit = price <= position.stop if position.direction > 0 else price >= position.stop
         if stop_hit:
             await self._close(symbol, position, reason="stop")
+            return
+        # The ceiling is enforced here as well as in the backtester: a rule that
+        # only exists in simulation is not a rule.
+        if position.opened_at is not None:
+            held = datetime.now(UTC) - position.opened_at
+            if held >= self.config.tf.delta * self.config.max_hold_bars:
+                await self._close(symbol, position, reason="time_stop")
 
     async def _record_risk(self, kind: str, detail: dict[str, object]) -> None:
         if self.store is not None:
