@@ -16,6 +16,7 @@ from decimal import Decimal
 
 from simin.risk.engine import Intent
 from simin.strategies.base import Strategy, StrategyContext
+from simin.strategies.swing import SwingMomentum, SwingPullback
 
 
 class TrendFollow(Strategy):
@@ -245,6 +246,8 @@ class RandomEntry(Strategy):
 
 
 ALL_STRATEGIES: dict[str, type[Strategy]] = {
+    SwingMomentum.name: SwingMomentum,
+    SwingPullback.name: SwingPullback,
     TrendFollow.name: TrendFollow,
     DonchianBreakout.name: DonchianBreakout,
     RangeMeanReversion.name: RangeMeanReversion,

@@ -237,7 +237,7 @@ class Backtester:
                 if qty > 0:
                     pending, pending_qty = intent, qty
                 continue
-            decision = self.risk.evaluate(state, intent, available_depth=depth)
+            decision = self.risk.evaluate(state, intent, available_depth=depth, now=bar.ts)
             if decision.rejected:
                 rejections[decision.reason] = rejections.get(decision.reason, 0) + 1
                 continue

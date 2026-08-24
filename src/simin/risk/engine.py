@@ -98,6 +98,10 @@ class AccountState:
     day_start_equity: Decimal
     week_start_equity: Decimal
     consecutive_losses: int = 0
+    #: Set when a losing streak trips the pause. Cleared by the passage of time,
+    #: not by a human, because a losing streak is a cooling-off signal rather
+    #: than evidence that something is broken.
+    loss_pause_until: datetime | None = None
     kill_switch: bool = False
     kill_reason: str | None = None
     positions: dict[str, OpenPosition] = field(default_factory=dict)
@@ -131,6 +135,24 @@ class AccountState:
     def roll_week(self) -> None:
         self.week_start_equity = self.equity
 
+    def register_loss_streak(self, now: datetime, cooldown: timedelta) -> None:
+        """Start a cooldown and reset the counter.
+
+        The counter must reset here: leaving it at the limit turns a temporary
+        pause into a permanent one, which on real data silently ends the run
+        after the first bad week.
+        """
+        self.loss_pause_until = now + cooldown
+        self.consecutive_losses = 0
+
+    def is_paused(self, now: datetime) -> bool:
+        if self.loss_pause_until is None:
+            return False
+        if now >= self.loss_pause_until:
+            self.loss_pause_until = None
+            return False
+        return True
+
     def trip(self, reason: str) -> None:
         """Kill switch. Only a human clears it — see docs/03 §1."""
         self.kill_switch = True
@@ -151,9 +173,16 @@ class Decision:
 
 
 class RiskEngine:
-    def __init__(self, limits: RiskLimits, *, min_notional: Decimal = Decimal(0)) -> None:
+    def __init__(
+        self,
+        limits: RiskLimits,
+        *,
+        min_notional: Decimal = Decimal(0),
+        loss_cooldown: timedelta = timedelta(hours=24),
+    ) -> None:
         self.limits = limits
         self.min_notional = min_notional
+        self.loss_cooldown = loss_cooldown
 
     # ------------------------------------------------------------------ sizing
 
@@ -211,7 +240,14 @@ class RiskEngine:
         if state.weekly_pnl_pct <= -self.limits.weekly_loss_stop * Decimal(2):
             return Decision(False, Decimal(0), RejectReason.WEEKLY_LOSS_STOP)
 
-        if state.consecutive_losses >= self.limits.max_consecutive_losses:
+        if now is not None:
+            if state.consecutive_losses >= self.limits.max_consecutive_losses:
+                state.register_loss_streak(now, self.loss_cooldown)
+            if state.is_paused(now):
+                return Decision(False, Decimal(0), RejectReason.LOSS_STREAK)
+        elif state.consecutive_losses >= self.limits.max_consecutive_losses:
+            # No clock supplied: fall back to a hard block rather than ignoring
+            # the limit entirely.
             return Decision(False, Decimal(0), RejectReason.LOSS_STREAK)
 
         if (

@@ -36,13 +36,16 @@ class Regime(enum.StrEnum):
 #: *permission*, not a prediction: sideways+high-vol allows nothing because it is
 #: the regime where both trend and mean-reversion bleed (docs/01 §3).
 REGIME_PLAYBOOK: dict[Regime, tuple[str, ...]] = {
-    Regime.STRONG_BULL: ("trend_follow", "donchian_breakout", "vol_breakout"),
-    Regime.WEAK_BULL: ("trend_follow", "range_mean_reversion"),
-    Regime.SIDEWAYS_LOW_VOL: ("range_mean_reversion",),
+    Regime.STRONG_BULL: (
+        "trend_follow", "donchian_breakout", "vol_breakout",
+        "swing_momentum", "swing_pullback",
+    ),
+    Regime.WEAK_BULL: ("trend_follow", "range_mean_reversion", "swing_momentum", "swing_pullback"),
+    Regime.SIDEWAYS_LOW_VOL: ("range_mean_reversion", "swing_pullback"),
     Regime.SIDEWAYS_HIGH_VOL: (),
     Regime.WEAK_BEAR: ("range_mean_reversion",),
     Regime.STRONG_BEAR: ("trend_follow",),
-    Regime.BREAKOUT: ("donchian_breakout", "vol_breakout"),
+    Regime.BREAKOUT: ("donchian_breakout", "vol_breakout", "swing_momentum"),
     Regime.PANIC: (),
     Regime.UNKNOWN: (),
 }

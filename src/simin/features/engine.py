@@ -70,6 +70,7 @@ def build_features(bars: Sequence[Bar], tf: TF | None = None) -> list[FeatureRow
         "vol72": ind.realized_vol(c, 72, per_year),
         "mom6": ind.momentum(c, 6),
         "mom24": ind.momentum(c, 24),
+        "mom48": ind.momentum(c, 48),
         "mom72": ind.momentum(c, 72),
         "trend_q20": ind.trend_quality(c, 20),
         "vol_z20": ind.volume_zscore(bars, 20),

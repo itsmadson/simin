@@ -251,3 +251,35 @@ def test_intent_validation():
         Intent(ts=NOW, symbol="X", direction=0, entry=Decimal(1), stop=Decimal(1), strategy="s")
     with pytest.raises(ValueError, match="confidence"):
         intent(confidence=1.5)
+
+
+def test_loss_streak_pause_expires_by_itself():
+    """Regression: the pause used to latch forever.
+
+    On a real 15-symbol portfolio run it blocked 61,370 entries and effectively
+    ended the backtest after the first bad stretch. A losing streak is a
+    cooling-off signal, not a fault, so it clears with time.
+    """
+    from datetime import timedelta
+
+    eng = RiskEngine(limits_for(RiskProfile.BALANCED), loss_cooldown=timedelta(hours=24))
+    state = account()
+    state.consecutive_losses = limits_for(RiskProfile.BALANCED).max_consecutive_losses
+
+    blocked = eng.evaluate(state, intent(), now=NOW)
+    assert blocked.reason is RejectReason.LOSS_STREAK
+    assert state.consecutive_losses == 0        # counter reset, not left latched
+
+    still_blocked = eng.evaluate(state, intent(), now=NOW + timedelta(hours=12))
+    assert still_blocked.reason is RejectReason.LOSS_STREAK
+
+    resumed = eng.evaluate(state, intent(), now=NOW + timedelta(hours=25))
+    assert resumed.approved
+    assert state.loss_pause_until is None
+
+
+def test_loss_streak_still_blocks_when_no_clock_is_supplied():
+    eng = RiskEngine(limits_for(RiskProfile.BALANCED))
+    state = account()
+    state.consecutive_losses = limits_for(RiskProfile.BALANCED).max_consecutive_losses
+    assert eng.evaluate(state, intent()).reason is RejectReason.LOSS_STREAK
