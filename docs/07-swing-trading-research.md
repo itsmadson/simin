@@ -102,6 +102,55 @@ been walk-forward validated, and tuning them until the backtest looks good is ex
 failure mode the whole validation stack exists to prevent. The next honest step is the Lab:
 optimise on 2022-2024 only, then look at 2025-2026 once.
 
+## 6. The holdout was opened. The result did not survive.
+
+Twelve configurations were searched on **2022-01-01 → 2024-12-31 only**, across 15 symbols at a
+0.20% round trip. The holdout (2025-01-01 → 2026-08-23) was then evaluated exactly once, with
+the trial count carried into the deflated Sharpe.
+
+**Training leaderboard (top 4 of 12):**
+
+| Score | Return | Sharpe | MaxDD | Trades | Parameters |
+|---:|---:|---:|---:|---:|---|
+| 0.38 | +7.18% | 0.38 | −11.3% | 2,458 | mom=0.02 quality=0.25 trend=0.02 |
+| 0.33 | +6.54% | 0.33 | −12.5% | 2,504 | mom=0.003 quality=0.25 trend=0.02 |
+| 0.28 | +5.06% | 0.28 | −11.3% | 2,451 | mom=0.02 quality=0.1 trend=0.02 |
+| 0.28 | +5.45% | 0.28 | −11.9% | 2,972 | mom=0.003 quality=0.25 trend=0.005 |
+
+Every single configuration was profitable in training. That is exactly the pattern that should
+raise suspicion rather than confidence.
+
+**Holdout, opened once:**
+
+| | Trades | Win rate | Profit factor | Return | Sharpe | MaxDD |
+|---|---:|---:|---:|---:|---:|---:|
+| Train (2022-2024) | 2,458 | 42.0% | 1.11 | **+7.2%** | 0.38 | −11.3% |
+| Holdout (2025-2026) | 1,279 | 35.2% | 0.91 | **−3.2%** | −0.40 | −8.2% |
+
+Deflated Sharpe on the holdout: **0.01**. Sharpe retention: **−104%** — the sign flipped.
+
+**VERDICT: INVALID.** The parameters fitted the training window. The profit factor fell from
+1.11 to 0.91 and the win rate from 42% to 35%, which is what a fitted edge looks like when the
+data it was fitted to runs out.
+
+This is the system working as designed. Twelve profitable-looking backtests, one honest test,
+and the honest test says no. Publishing the 7.2% figure and calling it a strategy would have
+been trivially easy and completely wrong.
+
+**What this does not invalidate:** the horizon curve in §1. That is a property of the data
+measured directly across three assets with t-statistics of 10-11, not a fitted parameter set.
+The edge at 48-96 hours is real. What failed is this particular way of *harvesting* it.
+
+Reproduce with:
+
+```bash
+docker compose exec api python -m simin.cli sweep --cutoff 2025-01-01
+```
+
+Every holdout access is written to `risk_events` with the trial count and chosen parameters.
+
+## 7. Conclusions
+
 What the research has already settled, and what no amount of tuning will change:
 
 - an intraday version of this cannot work on any venue, because the underlying signal is zero;
