@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from simin.config import RiskProfile, get_settings, limits_for
 from simin.data.ingest import backfill
@@ -20,7 +22,8 @@ from simin.exchanges.venues import PROFILES, profile
 from simin.logging import configure_logging, get_logger
 from simin.research import run_research
 from simin.risk.engine import RiskEngine
-from simin.types import TF
+from simin.strategies.base import Strategy
+from simin.types import TF, Bar
 
 log = get_logger(__name__)
 
@@ -182,6 +185,92 @@ def _cmd_gates(_args: argparse.Namespace) -> int:
     return 0
 
 
+async def _cmd_sweep(args: argparse.Namespace) -> int:
+    """Optimise on the training window, then open the holdout exactly once."""
+    from simin.backtest.costs import CostModel
+    from simin.backtest.portfolio import PortfolioConfig
+    from simin.db.store import SessionStore
+    from simin.exchanges.venues import profile
+    from simin.strategies.swing import SwingMomentum, SwingPullback
+    from simin.validation.optimize import Trial, grid, split_by_date, sweep
+
+    settings = get_settings()
+    engine = make_engine(settings.pg_dsn)
+    repo = Repo(engine)
+    store = SessionStore(engine)
+    tf = TF.parse(args.timeframe)
+    cutoff = _parse_date(args.cutoff)
+
+    try:
+        by_name: dict[str, list[int]] = {}
+        for row in await store.symbols():
+            by_name.setdefault(str(row["symbol"]), []).append(int(row["id"]))
+        series: dict[str, list[Bar]] = {}
+        for symbol, ids in by_name.items():
+            best: list[Bar] = []
+            for symbol_id in ids:
+                bars = await repo.get_bars(
+                    symbol_id, symbol, tf, _parse_date(args.start), datetime.now(UTC)
+                )
+                if len(bars) > len(best):
+                    best = bars
+            if len(best) >= args.min_bars:
+                series[symbol] = best
+        if not series:
+            print("no symbol has enough stored history; run `simin backfill` first")
+            return 1
+
+        train, holdout = split_by_date(series, cutoff)
+        print(f"universe {len(series)} symbols | train {sum(len(v) for v in train.values())} bars"
+              f" | holdout {sum(len(v) for v in holdout.values())} bars")
+
+        venue = profile(args.venue)
+        combos = grid(
+            min_momentum=[0.003, 0.008, 0.02],
+            min_quality=[0.10, 0.25],
+            min_trend=[0.005, 0.02],
+        )
+
+        def factory(params: Mapping[str, Any]) -> list[Strategy]:
+            return [
+                SwingMomentum(
+                    min_momentum=float(params["min_momentum"]),
+                    min_quality=float(params["min_quality"]),
+                ),
+                SwingPullback(min_trend=float(params["min_trend"])),
+            ]
+
+        def progress(i: int, n: int, trial: Trial) -> None:
+            metrics = trial.result.metrics
+            print(f"  [{i}/{n}] ret={metrics.total_return:>7.2%} sharpe={metrics.sharpe:>5.2f}"
+                  f" trades={metrics.n_trades:>5}")
+
+        report = sweep(
+            train, holdout, combos, factory,
+            risk=RiskEngine(limits_for(RiskProfile(args.risk_profile))),
+            config=PortfolioConfig(
+                starting_equity=settings.paper_start_balance_irt,
+                cost=CostModel(fees=venue.fees, spread_bps=venue.typical_spread_bps),
+                max_hold_bars=args.max_hold_bars,
+            ),
+            on_progress=progress,
+        )
+        print("\nTRAIN LEADERBOARD (holdout untouched)\n" + report.table())
+        print(f"\nchosen: {report.holdout_params}")
+        print("\nHOLDOUT — opened once\n" + report.verdict())
+
+        # Record the access: an out-of-sample set you opened twice is not one.
+        await store.record_risk_event(
+            None,
+            "oos_holdout_opened",
+            {"cutoff": cutoff.isoformat(), "trials": report.n_trials,
+             "params": report.holdout_params},
+        )
+        return 0 if report.holdout and report.holdout.metrics.total_return > 0 else 1
+    finally:
+        await engine.dispose()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="simin", description="Simin trading platform CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -227,6 +316,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     gt = sub.add_parser("gates", help="show the Go/No-Go checklist")
     gt.set_defaults(func=_cmd_gates)
+
+    sw = sub.add_parser("sweep", help="optimise on train, then open the holdout once")
+    sw.add_argument("--timeframe", default="1h")
+    sw.add_argument("--start", default="2022-01-01")
+    sw.add_argument("--cutoff", default="2025-01-01",
+                    help="everything from this date on is holdout and is opened once")
+    sw.add_argument("--risk-profile", default="aggressive",
+                    choices=[p.value for p in RiskProfile])
+    sw.add_argument("--venue", default="local_irt_generic")
+    sw.add_argument("--max-hold-bars", type=int, default=96)
+    sw.add_argument("--min-bars", type=int, default=12000)
+    sw.set_defaults(func=lambda a: asyncio.run(_cmd_sweep(a)))
     return parser
 
 

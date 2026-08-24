@@ -19,7 +19,7 @@ information into a slower one's decision.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -97,7 +97,7 @@ class PortfolioBacktester:
             self.cost = self.config.cost
 
     def run(
-        self, series: dict[str, Sequence[Bar]], strategies: Sequence[Strategy]
+        self, series: Mapping[str, Sequence[Bar]], strategies: Sequence[Strategy]
     ) -> PortfolioResult:
         if not series:
             raise ValueError("no symbols supplied")
