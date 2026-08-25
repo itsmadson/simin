@@ -39,6 +39,7 @@ from simin.features.engine import build_features
 from simin.features.regime import classify
 from simin.risk.engine import RiskEngine
 from simin.strategies import ALL_STRATEGIES, BENCHMARKS, build
+from simin.trader import TraderConfig
 from simin.types import TF, RunMode
 from simin.validation.gates import target_feasibility
 
@@ -80,6 +81,14 @@ def _store() -> SessionStore:
 class DatabaseUnavailable(HTTPException):
     def __init__(self) -> None:
         super().__init__(status_code=503, detail="database unavailable")
+
+
+async def _ensure_control(store: SessionStore) -> None:
+    """Create the control row if an older database predates it."""
+    try:
+        await store.ensure_control()
+    except (SQLAlchemyError, OSError, ConnectionError):
+        return
 
 
 async def _read[T](coro: Awaitable[T], default: T) -> T:
@@ -517,6 +526,93 @@ def feasibility(
     return target_feasibility(
         monthly_pct / 100.0, float(profile(venue).round_trip_cost()), trades_per_month
     )
+
+
+@app.get("/api/bot")
+async def bot_status() -> dict[str, Any]:
+    """Everything needed to answer "is it running, and what has it done?"."""
+    settings = get_settings()
+    store = _store()
+    await _ensure_control(store)
+    state = await _read(store.get_control(), {"paused": False, "reason": None})
+    run = await _read(store.active_run(), None)
+
+    since = datetime.now(UTC) - timedelta(days=7)
+    activity: dict[str, Any] = {}
+    open_positions: list[dict[str, Any]] = []
+    latest: dict[str, Any] | None = None
+    if run is not None:
+        run_id = uuid.UUID(str(run["id"]))
+        activity = await _read(store.session_activity(run_id, since), {})
+        open_positions = await _read(store.open_positions(run_id), [])
+        latest = await _read(store.latest_equity(run_id), None)
+
+    # Only this session's events decide the status. A halt from a previous run
+    # is history, not the current state of the bot.
+    session_start = run["started_at"] if run else None
+    recent_events = await _read(store.recent_risk_events(20, since=session_start), [])
+    halted = any(e.get("kind") == "halted" for e in recent_events[:3])
+    paused = bool(state.get("paused"))
+
+    if paused:
+        status_label = "PAUSED"
+    elif halted:
+        status_label = "HALTED"
+    elif run is not None:
+        status_label = "RUNNING"
+    else:
+        status_label = "NOT STARTED"
+
+    return {
+        "status": status_label,
+        "paused": paused,
+        "pause_reason": state.get("reason"),
+        "mode": settings.mode,
+        "can_control": settings.mode is not RunMode.LIVE,
+        "session_started_at": run["started_at"].isoformat() if run else None,
+        "strategies": list(TraderConfig().strategies),
+        "symbols": list(TraderConfig().symbols),
+        "max_hold_hours": TraderConfig().max_hold_bars,
+        "equity": float(latest["equity_irt"]) if latest else None,
+        "open_positions": len(open_positions),
+        "last_7_days": {k: float(v) if v is not None else 0 for k, v in activity.items()},
+        "recent_events": rows_to_jsonable(recent_events[:8]),
+    }
+
+
+@app.post("/api/bot/{action}")
+async def bot_control(action: str) -> dict[str, Any]:
+    """Start or pause the bot.
+
+    Available in LAB modes only. Starting real trading is not a button: it needs
+    an approval token issued out of band once the Go/No-Go checklist passes.
+    """
+    if action not in ("start", "pause"):
+        raise HTTPException(status_code=400, detail="action must be 'start' or 'pause'")
+    if get_settings().mode is RunMode.LIVE:
+        raise HTTPException(
+            status_code=403,
+            detail="live trading is not controlled from the dashboard; see docs/03",
+        )
+    store = _store()
+    await _ensure_control(store)
+    paused = action == "pause"
+    try:
+        state = await store.set_control(
+            paused=paused, reason="paused from dashboard" if paused else None, by="dashboard"
+        )
+    except (SQLAlchemyError, OSError) as exc:
+        raise DatabaseUnavailable from exc
+    return {
+        "status": "PAUSED" if paused else "RUNNING",
+        "paused": bool(state["paused"]),
+        "note": (
+            "Open positions are still managed while paused: stops and the holding "
+            "ceiling keep working. Pause stops new entries."
+            if paused
+            else "The trader picks this up within one poll cycle (60s)."
+        ),
+    }
 
 
 @app.post("/api/kill-switch")

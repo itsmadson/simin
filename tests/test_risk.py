@@ -189,16 +189,45 @@ def test_dust_orders_are_rejected():
     [
         {"reconciliation_mismatch": True},
         {"spread_bps": Decimal(300), "median_spread_bps": Decimal(20)},
-        {"venue_error_rate": 0.25},
-        {"clock_skew_ms": 5000.0},
         {"bar_gap_pct": -0.15},
     ],
 )
-def test_each_circuit_breaker_trips(kwargs):
+def test_state_corrupting_conditions_latch_until_a_human_clears_them(kwargs):
+    """These mean our view of reality is wrong. Continuing would act on false state."""
     eng, state = engine(), account()
     assert eng.check_circuit_breakers(state, **kwargs)
     assert state.kill_switch
     assert eng.evaluate(state, intent()).reason is RejectReason.KILL_SWITCH
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"venue_error_rate": 0.25},
+        {"clock_skew_ms": 5000.0},
+    ],
+)
+def test_transient_conditions_pause_and_then_clear_themselves(kwargs):
+    """Regression: a brief venue wobble used to latch the kill switch.
+
+    A real 44-hour paper session died after eight hours on exactly this and then
+    sat idle for a day and a half, reporting nothing. A flaky data feed is a
+    reason to wait, not a reason to need a human.
+    """
+    from datetime import timedelta
+
+    eng = RiskEngine(limits_for(RiskProfile.BALANCED),
+                     transient_cooldown=timedelta(minutes=15))
+    state = account()
+
+    reason = eng.check_circuit_breakers(state, now=NOW, **kwargs)
+    assert reason
+    assert not state.kill_switch                       # not latched
+    assert eng.evaluate(state, intent(), now=NOW).reason is RejectReason.STALE_DATA
+
+    later = eng.evaluate(state, intent(), now=NOW + timedelta(minutes=20))
+    assert later.approved                              # recovered on its own
+    assert state.transient_pause_until is None
 
 
 def test_healthy_conditions_do_not_trip_anything():

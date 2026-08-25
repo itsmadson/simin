@@ -78,6 +78,7 @@ class TraderState:
     #: db position id per symbol, so a close can update the row it opened
     position_ids: dict[str, uuid.UUID] = field(default_factory=dict)
     ticks: int = 0
+    paused: bool = False
 
 
 class Trader:
@@ -157,6 +158,23 @@ class Trader:
     async def tick(self) -> None:
         """One decision cycle across all symbols."""
         self.state.ticks += 1
+
+        # The operator's pause lives in the database because the dashboard runs
+        # in a different process. Checked first, and checked every cycle, so
+        # pressing Pause takes effect within one poll interval.
+        if self.store is not None:
+            control = await self.store.get_control()
+            paused = bool(control.get("paused"))
+            if paused != self.state.paused:
+                self.state.paused = paused
+                log.info("trader.control", paused=paused, reason=control.get("reason"))
+            if paused:
+                # Open positions are still managed: stops and the holding
+                # ceiling keep working. Pause means "stop opening", not
+                # "abandon what is open".
+                await self._manage_all_positions()
+                return
+
         if self.state.account.kill_switch:
             log.error("trader.halted", reason=self.state.account.kill_reason)
             await self._record_risk("halted", {"reason": self.state.account.kill_reason})
@@ -167,10 +185,16 @@ class Trader:
             self.state.account,
             venue_error_rate=health.error_rate,
             clock_skew_ms=health.clock_skew_ms,
+            now=datetime.now(UTC),
         )
         if breaker:
-            log.error("trader.circuit_breaker", reason=breaker)
-            await self._record_risk("circuit_breaker", {"reason": breaker})
+            # A transient condition pauses entries but still manages positions;
+            # a latched one stops everything until a human intervenes.
+            latched = bool(self.state.account.kill_switch)
+            log.warning("trader.circuit_breaker", reason=breaker, latched=latched)
+            await self._record_risk("circuit_breaker", {"reason": breaker, "latched": latched})
+            if not latched:
+                await self._manage_all_positions()
             return
 
         now = datetime.now(UTC)
@@ -287,6 +311,29 @@ class Trader:
             held = datetime.now(UTC) - position.opened_at
             if held >= self.config.tf.delta * self.config.max_hold_bars:
                 await self._close(symbol, position, reason="time_stop")
+
+    async def _manage_all_positions(self) -> None:
+        """Run stop and ceiling management without considering new entries."""
+        now = datetime.now(UTC)
+        for symbol in list(self.state.account.positions):
+            position = self.state.account.positions.get(symbol)
+            if position is None:
+                continue
+            try:
+                ticker = await self.adapter.get_ticker(symbol)
+            except VenueError:
+                continue
+            stop_hit = (
+                ticker.last <= position.stop
+                if position.direction > 0
+                else ticker.last >= position.stop
+            )
+            if stop_hit:
+                await self._close(symbol, position, reason="stop")
+            elif position.opened_at is not None:
+                held = now - position.opened_at
+                if held >= self.config.tf.delta * self.config.max_hold_bars:
+                    await self._close(symbol, position, reason="time_stop")
 
     async def _record_risk(self, kind: str, detail: dict[str, object]) -> None:
         if self.store is not None:
@@ -496,6 +543,7 @@ async def main() -> None:  # pragma: no cover - process entry point
         store=store,
         symbol_ids=symbol_ids,
     )
+    await store.ensure_control()
     await trader.start_session(venue_id=venue_id)
     try:
         await trader.run_forever()

@@ -8,6 +8,7 @@ and the USDT reference leg of every Toman pair (docs/01-research.md §0.1).
 
 from __future__ import annotations
 
+from collections import deque
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -69,8 +70,11 @@ class PublicGlobalAdapter(ExchangeAdapter):
         self._bucket = TokenBucket(capacity=requests_per_minute, per_seconds=60.0)
         self._breaker = CircuitBreaker()
         self._latencies: list[float] = []
-        self._errors = 0
-        self._calls = 0
+        #: Rolling outcome window: True for an error, False for a success. A
+        #: cumulative rate since process start never recovers — one bad minute
+        #: at boot leaves the ratio above the circuit-breaker threshold forever,
+        #: which silently killed a 44-hour paper session after eight hours.
+        self._outcomes: deque[bool] = deque(maxlen=200)
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         if self._breaker.is_open:
@@ -82,27 +86,27 @@ class PublicGlobalAdapter(ExchangeAdapter):
             try:
                 resp = await self._client.get(path, params=params)
             except httpx.HTTPError as exc:
-                self._errors += 1
+                self._outcomes.append(True)
                 self._breaker.record_failure()
                 raise VenueUnavailable(f"{self.venue}: {exc!s}") from exc
             finally:
-                self._calls += 1
                 self._latencies.append((datetime.now(UTC) - started).total_seconds() * 1000)
                 del self._latencies[:-500]
 
             if resp.status_code in (418, 429):
-                self._errors += 1
+                self._outcomes.append(True)
                 retry_after = resp.headers.get("retry-after")
                 raise RateLimited(
                     f"{self.venue}: rate limited",
                     retry_after=float(retry_after) if retry_after else None,
                 )
             if resp.status_code >= 500:
-                self._errors += 1
+                self._outcomes.append(True)
                 self._breaker.record_failure()
                 raise VenueUnavailable(f"{self.venue}: HTTP {resp.status_code}")
             if resp.status_code >= 400:
                 raise VenueError(f"{self.venue}: HTTP {resp.status_code} {resp.text[:200]}")
+            self._outcomes.append(False)
             self._breaker.record_success()
             return resp.json()
 
@@ -208,10 +212,17 @@ class PublicGlobalAdapter(ExchangeAdapter):
             venue=self.venue,
             ok=ok and not self._breaker.is_open,
             latency_p95_ms=p95,
-            error_rate=(self._errors / self._calls) if self._calls else 0.0,
+            error_rate=self.error_rate,
             clock_skew_ms=skew_ms,
             checked_at=started,
         )
+
+    @property
+    def error_rate(self) -> float:
+        """Error rate over the recent request window, not over all time."""
+        if not self._outcomes:
+            return 0.0
+        return sum(self._outcomes) / len(self._outcomes)
 
     async def close(self) -> None:
         await self._client.aclose()

@@ -89,6 +89,23 @@ code{font-family:var(--mono);font-size:12px;background:var(--bg);padding:1px 5px
 .gaterow .req{color:var(--dim);font-size:11.5px;margin-inline-start:auto;text-align:end}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);flex:none}
 .dot.ok{background:var(--good)}.dot.no{background:var(--bad)}
+.botcard{background:linear-gradient(180deg,#141c26,#101720);border:1px solid var(--line-2);
+  border-radius:12px;padding:18px 20px;margin-bottom:16px;display:flex;gap:20px;
+  align-items:center;flex-wrap:wrap}
+.botstate{display:flex;align-items:center;gap:12px;min-width:220px}
+.beacon{width:14px;height:14px;border-radius:50%;flex:none;box-shadow:0 0 0 0 currentColor}
+.beacon.run{background:var(--good);color:var(--good);animation:pulse 2s infinite}
+.beacon.pause{background:var(--warn);color:var(--warn)}
+.beacon.halt{background:var(--bad);color:var(--bad)}
+.beacon.off{background:var(--dim);color:var(--dim)}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(63,185,80,.5)}70%{box-shadow:0 0 0 10px rgba(63,185,80,0)}100%{box-shadow:0 0 0 0 rgba(63,185,80,0)}}
+.botstate .big{font-size:22px;font-weight:600;letter-spacing:.5px}
+.botfacts{display:flex;gap:26px;flex-wrap:wrap;flex:1}
+.fact .v{font-size:18px;font-variant-numeric:tabular-nums}
+.fact .k{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-top:2px}
+.btn.big{padding:11px 26px;font-size:15px;font-weight:600}
+.btn.go{border-color:var(--good);color:var(--good)}
+.btn.go:hover{background:rgba(63,185,80,.12)}
 .spinner{display:inline-block;width:12px;height:12px;border:2px solid var(--line-2);border-top-color:var(--accent);
   border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -296,13 +313,57 @@ function barChart(canvas, labels, values, opts={}){
 /* ---------------------------- pages ---------------------------- */
 const RENDER = {};
 
+function botCard(bot){
+  const map = {RUNNING:["run","botRunning","botHelp"],PAUSED:["pause","botPaused","pausedHelp"],
+               HALTED:["halt","botHalted","haltedHelp"],"NOT STARTED":["off","botOff","offHelp"]};
+  const [cls, label, help] = map[bot.status] || map["NOT STARTED"];
+  const a = bot.last_7_days || {};
+  const since = bot.session_started_at ? dt(bot.session_started_at) : "—";
+  const canPause = bot.status === "RUNNING";
+  const btn = bot.can_control
+    ? `<button class="btn big ${canPause?"":"go"}" id="bot-btn" data-action="${canPause?"pause":"start"}">
+         ${canPause ? t("pauseBot") : t("startBot")}</button>`
+    : "";
+  return `
+  <div class="botcard">
+    <div class="botstate">
+      <span class="beacon ${cls}"></span>
+      <div><div class="big">${t(label)}</div>
+      <div class="sub">${esc(bot.pause_reason || t(help))}</div></div>
+    </div>
+    <div class="botfacts">
+      <div class="fact"><div class="v">${since}</div><div class="k">${t("uptime")}</div></div>
+      <div class="fact"><div class="v">${bot.symbols.length}</div><div class="k">${t("watching")}</div></div>
+      <div class="fact"><div class="v">${bot.max_hold_hours}${lang==="fa"?"":"h"}</div><div class="k">${t("maxHold")}</div></div>
+      <div class="fact"><div class="v">${bot.open_positions}</div><div class="k">${t("openPos")}</div></div>
+      <div class="fact"><div class="v">${a.opened||0} / ${a.closed||0}</div><div class="k">${t("last7")}: ${t("opened")}/${t("closedT")}</div></div>
+      <div class="fact"><div class="v ${sign(a.realized)}">${money(a.realized||0)}</div><div class="k">${t("last7")} ${t("pnl7")}</div></div>
+    </div>
+    ${btn}
+  </div>`;
+}
+
+async function wireBotButton(){
+  const btn = document.getElementById("bot-btn");
+  if(!btn) return;
+  btn.onclick = async () => {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.innerHTML = `<span class="spinner"></span>`;
+    try { await api(`/api/bot/${btn.dataset.action}`, {method:"POST"}); await go("overview"); }
+    catch(e){ btn.textContent = original; btn.disabled = false; alert(e.message); }
+  };
+}
+
 RENDER.overview = async (root) => {
-  const [p, eq, act] = await Promise.all([api("/api/portfolio"), api("/api/equity?limit=600"), api("/api/activity?limit=25")]);
+  const [bot, p, eq, act] = await Promise.all([
+    api("/api/bot"), api("/api/portfolio"), api("/api/equity?limit=600"), api("/api/activity?limit=25")]);
   if(!p.has_session){
-    root.innerHTML = `<div class="note warn">${esc(t("noSession"))}</div>`;
+    root.innerHTML = botCard(bot) + `<div class="note warn">${esc(t("noSession"))}</div>`;
+    wireBotButton();
     return;
   }
-  root.innerHTML = `
+  root.innerHTML = botCard(bot) + `
    <div class="grid">
      <div class="card"><h3>${t("equity")}</h3><div class="kpi">${money(p.equity)}<span class="sub"> IRT</span></div>
        <div class="sub ${sign(p.total_return)}">${pct(p.total_return)} ${t("totalReturn")}</div></div>
@@ -315,6 +376,7 @@ RENDER.overview = async (root) => {
      <div class="card full"><h3>${t("equityCurve")}</h3><canvas id="eqchart" height="220"></canvas></div>
      <div class="card full"><h3>${t("activity")}</h3><div id="acts"></div></div>
    </div>`;
+  wireBotButton();
   lineChart(document.getElementById("eqchart"), eq.points.map(x=>x.equity_irt), {height:220});
   document.getElementById("acts").innerHTML = table(
     [{label:t("time"),get:r=>dt(r.ts)},{label:t("event"),get:r=>`<span class="pill">${esc(r.kind)}</span>`},

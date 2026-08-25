@@ -109,3 +109,23 @@ def test_dashboard_is_served_with_sidebar_tabs_and_both_languages(client):
         assert page in html
     assert 'dir="rtl"' in html or "rtl" in html
     assert "cdn" not in html.lower()          # no external requests, ever
+
+
+def test_bot_status_answers_is_it_running(client):
+    body = client.get("/api/bot").json()
+    assert body["status"] in ("RUNNING", "PAUSED", "HALTED", "NOT STARTED")
+    assert body["can_control"] is True          # paper mode is controllable
+    assert body["max_hold_hours"] == 96
+    assert len(body["symbols"]) >= 10
+    assert "last_7_days" in body
+
+
+def test_start_and_pause_are_rejected_for_unknown_actions(client):
+    assert client.post("/api/bot/explode").status_code == 400
+
+
+def test_dashboard_shows_the_bot_control_card(client):
+    html = client.get("/").text
+    assert "bot-btn" in html
+    assert "startBot" in html and "pauseBot" in html
+    assert "beacon" in html

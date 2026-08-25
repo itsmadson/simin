@@ -277,6 +277,79 @@ class SessionStore:
                 },
             )
 
+    # ---------------------------------------------------------------- control
+
+    async def ensure_control(self) -> None:
+        """Create the control row if the schema predates it.
+
+        Written defensively because an existing database will not have run the
+        newer init script, and a missing row must not stop the bot.
+        """
+        async with self._engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS bot_control (
+                        id smallint PRIMARY KEY DEFAULT 1,
+                        paused boolean NOT NULL DEFAULT false,
+                        reason text,
+                        updated_at timestamptz NOT NULL DEFAULT now(),
+                        updated_by text NOT NULL DEFAULT 'system'
+                    )
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO bot_control (id, paused, updated_by) VALUES (1, false, 'auto')"
+                    " ON CONFLICT (id) DO NOTHING"
+                )
+            )
+
+    async def get_control(self) -> dict[str, Any]:
+        rows = await self._rows(
+            "SELECT paused, reason, updated_at, updated_by FROM bot_control WHERE id = 1"
+        )
+        if rows:
+            return rows[0]
+        return {"paused": False, "reason": None, "updated_at": utcnow(), "updated_by": "default"}
+
+    async def set_control(self, *, paused: bool, reason: str | None, by: str) -> dict[str, Any]:
+        sql = text(
+            """
+            INSERT INTO bot_control (id, paused, reason, updated_at, updated_by)
+            VALUES (1, :paused, :reason, now(), :by)
+            ON CONFLICT (id) DO UPDATE SET
+                paused = EXCLUDED.paused, reason = EXCLUDED.reason,
+                updated_at = now(), updated_by = EXCLUDED.updated_by
+            RETURNING paused, reason, updated_at, updated_by
+            """
+        )
+        async with self._engine.begin() as conn:
+            row = (await conn.execute(sql, {"paused": paused, "reason": reason, "by": by})).one()
+        return dict(row._mapping)
+
+    async def session_activity(self, run_id: uuid.UUID, since: datetime) -> dict[str, Any]:
+        """What the bot did since ``since`` — the "while you were asleep" summary."""
+        rows = await self._rows(
+            """
+            SELECT
+              (SELECT count(*) FROM positions
+                 WHERE run_id = :run AND opened_at >= :since)                     AS opened,
+              (SELECT count(*) FROM positions
+                 WHERE run_id = :run AND closed_at >= :since)                     AS closed,
+              (SELECT coalesce(sum(realized_pnl_irt), 0) FROM positions
+                 WHERE run_id = :run AND closed_at >= :since)                     AS realized,
+              (SELECT count(*) FROM signals
+                 WHERE run_id = :run AND ts >= :since)                            AS signals,
+              (SELECT count(*) FROM orders
+                 WHERE run_id = :run AND created_at >= :since)                    AS orders,
+              (SELECT count(*) FROM risk_events WHERE ts >= :since)               AS risk_events
+            """,
+            {"run": run_id, "since": since},
+        )
+        return rows[0] if rows else {}
+
     # ------------------------------------------------------------------- read
 
     async def _rows(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -359,10 +432,23 @@ class SessionStore:
             {"run": run_id, "lim": limit},
         )
 
-    async def recent_risk_events(self, limit: int = 50) -> list[dict[str, Any]]:
+    async def recent_risk_events(
+        self, limit: int = 50, since: datetime | None = None
+    ) -> list[dict[str, Any]]:
+        """Recent risk events, optionally scoped to the current session.
+
+        Scoping matters: without it, halts recorded by a previous session make a
+        healthy running bot look dead on the dashboard.
+        """
+        if since is None:
+            return await self._rows(
+                "SELECT ts, kind, detail FROM risk_events ORDER BY ts DESC LIMIT :lim",
+                {"lim": limit},
+            )
         return await self._rows(
-            "SELECT ts, kind, detail FROM risk_events ORDER BY ts DESC LIMIT :lim",
-            {"lim": limit},
+            "SELECT ts, kind, detail FROM risk_events WHERE ts >= :since"
+            " ORDER BY ts DESC LIMIT :lim",
+            {"lim": limit, "since": since},
         )
 
     async def data_coverage(self) -> list[dict[str, Any]]:

@@ -102,6 +102,9 @@ class AccountState:
     #: not by a human, because a losing streak is a cooling-off signal rather
     #: than evidence that something is broken.
     loss_pause_until: datetime | None = None
+    #: Set by a transient condition (flaky feed, clock drift). Also self-clearing.
+    transient_pause_until: datetime | None = None
+    transient_reason: str | None = None
     kill_switch: bool = False
     kill_reason: str | None = None
     positions: dict[str, OpenPosition] = field(default_factory=dict)
@@ -145,6 +148,19 @@ class AccountState:
         self.loss_pause_until = now + cooldown
         self.consecutive_losses = 0
 
+    def pause_new_entries(self, now: datetime, cooldown: timedelta, reason: str) -> None:
+        self.transient_pause_until = now + cooldown
+        self.transient_reason = reason
+
+    def is_transiently_paused(self, now: datetime) -> bool:
+        if self.transient_pause_until is None:
+            return False
+        if now >= self.transient_pause_until:
+            self.transient_pause_until = None
+            self.transient_reason = None
+            return False
+        return True
+
     def is_paused(self, now: datetime) -> bool:
         if self.loss_pause_until is None:
             return False
@@ -179,10 +195,12 @@ class RiskEngine:
         *,
         min_notional: Decimal = Decimal(0),
         loss_cooldown: timedelta = timedelta(hours=24),
+        transient_cooldown: timedelta = timedelta(minutes=15),
     ) -> None:
         self.limits = limits
         self.min_notional = min_notional
         self.loss_cooldown = loss_cooldown
+        self.transient_cooldown = transient_cooldown
 
     # ------------------------------------------------------------------ sizing
 
@@ -239,6 +257,12 @@ class RiskEngine:
 
         if state.weekly_pnl_pct <= -self.limits.weekly_loss_stop * Decimal(2):
             return Decision(False, Decimal(0), RejectReason.WEEKLY_LOSS_STOP)
+
+        if now is not None and state.is_transiently_paused(now):
+            return Decision(
+                False, Decimal(0), RejectReason.STALE_DATA,
+                detail=state.transient_reason or "transient pause",
+            )
 
         if now is not None:
             if state.consecutive_losses >= self.limits.max_consecutive_losses:
@@ -358,24 +382,41 @@ class RiskEngine:
         clock_skew_ms: float | None = None,
         bar_gap_pct: float | None = None,
         reconciliation_mismatch: bool = False,
+        now: datetime | None = None,
     ) -> str | None:
         """Trip on conditions that mean the world no longer matches our model.
 
-        Each of these has ended real accounts: trading into a blown-out spread,
-        acting on a stale clock, or holding a position the exchange says you do
-        not have.
+        Two severities, deliberately separated:
+
+        * **Latching** — the system's view of reality is wrong (a position the
+          venue disagrees about) or the market is not tradeable (a blown-out
+          spread, a violent gap). These need a person, because continuing risks
+          acting on false state.
+        * **Transient** — the data source is flaky or the clock drifted. These
+          pause new entries and clear themselves once conditions return. A
+          latching halt here is worse than useless: a paper session died after
+          eight hours on a brief venue wobble and then sat idle for a day and a
+          half, reporting nothing.
+
+        Open positions keep being managed under both: stops still work.
         """
         if reconciliation_mismatch:
             state.trip("position reconciliation mismatch vs venue")
         elif spread_bps is not None and median_spread_bps and spread_bps > median_spread_bps * 3:
             state.trip(f"spread {spread_bps}bps > 3x median {median_spread_bps}bps")
-        elif venue_error_rate is not None and venue_error_rate > 0.10:
-            state.trip(f"venue error rate {venue_error_rate:.0%}")
-        elif clock_skew_ms is not None and abs(clock_skew_ms) > 2000:
-            state.trip(f"clock skew {clock_skew_ms:.0f}ms")
         elif bar_gap_pct is not None and abs(bar_gap_pct) > 0.08:
             state.trip(f"price gap {bar_gap_pct:.1%} in one bar")
+        elif venue_error_rate is not None and venue_error_rate > 0.10:
+            return self._pause(state, f"venue error rate {venue_error_rate:.0%}", now)
+        elif clock_skew_ms is not None and abs(clock_skew_ms) > 2000:
+            return self._pause(state, f"clock skew {clock_skew_ms:.0f}ms", now)
         return state.kill_reason if state.kill_switch else None
+
+    def _pause(self, state: AccountState, reason: str, now: datetime | None) -> str:
+        """Suspend new entries for a cooling-off period without latching."""
+        if now is not None:
+            state.pause_new_entries(now, self.transient_cooldown, reason)
+        return reason
 
 
 def new_account(starting_equity: Decimal, *, ts: datetime | None = None) -> AccountState:
