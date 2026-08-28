@@ -1,114 +1,80 @@
+# Simin — سیمین
+#
+#   docker compose up
+#
+# That is the whole setup. It starts on the offline demo venue, in LAB mode, at
+# risk level 4, and needs no credentials and no network to the exchanges.
+#
+# Nothing here can spend money. Real trading requires SIMIN_MODE=real, real API
+# credentials, SIMIN_REAL_MODE_ACKNOWLEDGED=1, a positive SIMIN_MAX_CAPITAL, and
+# a typed confirmation phrase in the UI. Five separate deliberate acts, because
+# the cost of starting a live bot by accident is unbounded.
+
 name: simin
 
-# One command brings the whole system up:
-#
-#     docker compose up -d
-#
-# postgres -> bootstrap (loads real market history) -> api + trader (paper mode).
-# Nothing here can place a real order: SIMIN_MODE defaults to paper and live mode
-# additionally requires an approval token that no default environment has.
-
-x-app: &app
-  build:
-    context: .
-    args:
-      PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
-  environment:
-    SIMIN_PG_DSN: postgresql+asyncpg://simin:simin@postgres:5432/simin
-    SIMIN_REDIS_URL: redis://redis:6379/0
-    SIMIN_MODE: ${SIMIN_MODE:-paper}
-    SIMIN_RISK_PROFILE: ${SIMIN_RISK_PROFILE:-balanced}
-    SIMIN_PUBLIC_DATA_BASE: ${SIMIN_PUBLIC_DATA_BASE:-https://api.binance.com}
-    SIMIN_LOG_LEVEL: ${SIMIN_LOG_LEVEL:-INFO}
-    SIMIN_LOG_JSON: ${SIMIN_LOG_JSON:-true}
-    SIMIN_PAPER_START_BALANCE_IRT: ${SIMIN_PAPER_START_BALANCE_IRT:-100000000}
-  volumes:
-    - simin-data:/data
-
 services:
-  postgres:
-    # TimescaleDB when available, plain Postgres otherwise: the schema detects
-    # the extension at init time and degrades to regular tables if it is absent.
-    # Override with SIMIN_PG_IMAGE=timescale/timescaledb:latest-pg16 for hypertables.
-    image: ${SIMIN_PG_IMAGE:-postgres:16}
-    environment:
-      POSTGRES_USER: simin
-      POSTGRES_PASSWORD: simin
-      POSTGRES_DB: simin
-    volumes:
-      - simin-pg:/var/lib/postgresql/data
-      - ./db/init:/docker-entrypoint-initdb.d:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U simin -d simin"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    restart: unless-stopped
-
-  redis:
-    image: ${SIMIN_REDIS_IMAGE:-redis:7-alpine}
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - simin-redis:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
-  # Loads real market history on first boot, then exits. Idempotent: re-running
-  # it only fetches bars that are missing.
-  bootstrap:
-    <<: *app
-    command: ["sh", "docker/bootstrap.sh"]
-    environment:
-      SIMIN_PG_DSN: postgresql+asyncpg://simin:simin@postgres:5432/simin
-      SIMIN_PUBLIC_DATA_BASE: ${SIMIN_PUBLIC_DATA_BASE:-https://api.binance.com}
-      SIMIN_BOOTSTRAP_SYMBOLS: ${SIMIN_BOOTSTRAP_SYMBOLS:-BTCUSDT ETHUSDT SOLUSDT}
-      SIMIN_BOOTSTRAP_TIMEFRAMES: ${SIMIN_BOOTSTRAP_TIMEFRAMES:-1h 4h 1d}
-      SIMIN_BOOTSTRAP_START: ${SIMIN_BOOTSTRAP_START:-2022-01-01}
-      SIMIN_LOG_JSON: "false"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: on-failure:3
-
   api:
-    <<: *app
-    command: ["uvicorn", "simin.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    build:
+      context: ./backend
+      args:
+        # Override when pypi.org is unreachable:
+        #   docker compose build --build-arg PIP_INDEX_URL=<mirror>
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    restart: unless-stopped
     ports:
       - "${SIMIN_API_PORT:-8000}:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-    restart: unless-stopped
+    environment:
+      # --- Mode. Defaults are the safe ones. -----------------------------
+      SIMIN_MODE: ${SIMIN_MODE:-lab}
+      SIMIN_VENUE: ${SIMIN_VENUE:-offline}
+      SIMIN_RISK_LEVEL: ${SIMIN_RISK_LEVEL:-4}
+      SIMIN_SYMBOLS: ${SIMIN_SYMBOLS:-BTCUSDT ETHUSDT SOLUSDT}
+      SIMIN_STARTING_EQUITY: ${SIMIN_STARTING_EQUITY:-10000}
+      SIMIN_POLL_SECONDS: ${SIMIN_POLL_SECONDS:-15}
 
-  # Paper trading. Single replica by construction: two traders would open two
-  # copies of every position. Waits for the first data load to finish.
-  trader:
-    <<: *app
-    command: ["python", "-m", "simin.trader"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      bootstrap:
-        condition: service_completed_successfully
-    deploy:
-      replicas: 1
+      # --- The real-mode gate. No defaults, deliberately. ----------------
+      SIMIN_REAL_MODE_ACKNOWLEDGED: ${SIMIN_REAL_MODE_ACKNOWLEDGED:-}
+      SIMIN_MAX_CAPITAL: ${SIMIN_MAX_CAPITAL:-0}
+      SIMIN_TRADING_FROZEN: ${SIMIN_TRADING_FROZEN:-0}
+
+      # --- Credentials. Set these in a .env file, never in this file. ----
+      SIMIN_COINEX_KEY: ${SIMIN_COINEX_KEY:-}
+      SIMIN_COINEX_SECRET: ${SIMIN_COINEX_SECRET:-}
+      SIMIN_NOBITEX_KEY: ${SIMIN_NOBITEX_KEY:-}
+      SIMIN_NOBITEX_SECRET: ${SIMIN_NOBITEX_SECRET:-}
+      SIMIN_NOBITEX_BASE_URL: ${SIMIN_NOBITEX_BASE_URL:-}
+      SIMIN_WALLEX_KEY: ${SIMIN_WALLEX_KEY:-}
+      SIMIN_WALLEX_SECRET: ${SIMIN_WALLEX_SECRET:-}
+
+      SIMIN_DATA_DIR: /data
+      SIMIN_CORS_ORIGINS: ${SIMIN_CORS_ORIGINS:-http://localhost:3000}
+      SIMIN_LOG_LEVEL: ${SIMIN_LOG_LEVEL:-INFO}
+      SIMIN_LOG_JSON: ${SIMIN_LOG_JSON:-0}
+    volumes:
+      # Calibration results live here. Losing this volume means losing every
+      # measured number on the dial, and the UI correctly reverts to saying
+      # "not measured" rather than inventing one.
+      - simin-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  ui:
+    build:
+      context: ./frontend
+      args:
+        # The browser reaches the API directly, so this is the address as seen
+        # from the browser — not from inside the compose network.
+        NEXT_PUBLIC_API_URL: ${SIMIN_PUBLIC_API_URL:-http://localhost:8000}
     restart: unless-stopped
+    ports:
+      - "${SIMIN_UI_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
-  simin-pg:
-  simin-redis:
   simin-data:

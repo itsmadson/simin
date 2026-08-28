@@ -1,0 +1,375 @@
+/*
+  Simin — سیمین ("silvery")
+  ─────────────────────────────────────────────────────────────────────────────
+
+  The interface is a precision instrument: brushed silver on near-black, with
+  one dominant physical control. Everything else is a readout.
+
+  The colour system is driven by ONE variable, --heat (0..1), set from the
+  current risk level. As the dial turns up, the whole interface warms from
+  silver-cyan through amber to crimson. That is not decoration — it is the
+  primary signal that the machine has been made more dangerous, applied
+  everywhere at once so it cannot be missed or dismissed as a single red label.
+*/
+
+@font-face {
+  font-family: 'Morabba VF';
+  src: url('/fonts/MorabbaVF.woff2') format('woff2-variations'),
+       url('/fonts/MorabbaVF.woff') format('woff-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Static cuts, for browsers that decline the variable axis. */
+@font-face {
+  font-family: 'Morabba';
+  src: url('/fonts/Morabba-Light.woff2') format('woff2');
+  font-weight: 300; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Morabba';
+  src: url('/fonts/Morabba-Regular.woff2') format('woff2');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Morabba';
+  src: url('/fonts/Morabba-Medium.woff2') format('woff2');
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Morabba';
+  src: url('/fonts/Morabba-SemiBold.woff2') format('woff2');
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Morabba';
+  src: url('/fonts/Morabba-Bold.woff2') format('woff2');
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Morabba';
+  src: url('/fonts/Morabba-ExtraBold.woff2') format('woff2');
+  font-weight: 800; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Morabba';
+  src: url('/fonts/Morabba-Black.woff2') format('woff2');
+  font-weight: 900; font-style: normal; font-display: swap;
+}
+
+:root {
+  /* Ground */
+  --void: #07080b;
+  --pit: #0b0d12;
+  --panel: #10131a;
+  --panel-2: #161a23;
+  --rule: #1e232e;
+  --rule-2: #2b3140;
+
+  /* Silver — the brand. Simin means silvery. */
+  --silver: #d8dde6;
+  --silver-2: #9aa3b2;
+  --silver-3: #646d7d;
+  --silver-4: #3d4451;
+
+  /* Verdict colours. Used for outcomes only, never for decoration. */
+  --gain: #34d399;
+  --loss: #f4436c;
+  --warn: #fbbf24;
+  --info: #60a5fa;
+
+  /*
+    The heat axis. `--heat` is written by the app from the risk level and
+    everything temperature-related interpolates from it.
+  */
+  --heat: 0.3;
+  --cool: 178 82% 52%;
+  --mid: 38 96% 56%;
+  --hot: 348 92% 58%;
+  --accent: hsl(var(--cool));
+  --accent-soft: hsl(var(--cool) / 0.14);
+  --accent-line: hsl(var(--cool) / 0.35);
+
+  --font-display: 'Morabba VF', 'Morabba', ui-sans-serif, system-ui, sans-serif;
+  --font-ui: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  --r-sm: 6px;
+  --r: 12px;
+  --r-lg: 18px;
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-snap: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Persian gets Morabba for body text too; Latin keeps a UI sans for numerals. */
+:root[lang='fa'] {
+  --font-ui: 'Morabba VF', 'Morabba', ui-sans-serif, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--void);
+  color: var(--silver);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  /*
+    A very slow radial wash keyed to the heat axis. At level 1 it is an almost
+    imperceptible cool glow; at level 10 the room is on fire. It sits behind
+    everything at low opacity so it registers peripherally rather than being
+    read as a UI element.
+  */
+  background-image:
+    radial-gradient(1200px 700px at 78% -8%, hsl(var(--hot) / calc(var(--heat) * 0.16)), transparent 60%),
+    radial-gradient(900px 600px at 8% 4%, hsl(var(--cool) / calc((1 - var(--heat)) * 0.10)), transparent 62%);
+  background-attachment: fixed;
+  min-height: 100vh;
+}
+
+::selection { background: hsl(var(--cool) / 0.3); color: #fff; }
+
+/* Numerals must never reflow as they tick. */
+.tab { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+
+h1, h2, h3, .display {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+a { color: inherit; text-decoration: none; }
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+input, select {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--silver);
+  background: var(--pit);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-sm);
+  padding: 9px 12px;
+  outline: none;
+  transition: border-color 0.18s var(--ease);
+}
+input:focus, select:focus { border-color: var(--accent-line); }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Layout primitives ───────────────────────────────────────────────────── */
+
+.shell { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+:root[dir='rtl'] .shell { grid-template-columns: 1fr 232px; }
+
+.rail {
+  background: linear-gradient(180deg, var(--pit), var(--void));
+  border-inline-end: 1px solid var(--rule);
+  padding: 22px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+:root[dir='rtl'] .rail { order: 2; border-inline-end: none; border-inline-start: 1px solid var(--rule); }
+
+.main { padding: 28px 34px 80px; max-width: 1500px; width: 100%; }
+
+.grid { display: grid; gap: 16px; }
+.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.g4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+@media (max-width: 1180px) {
+  .g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .g3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 860px) {
+  .shell { grid-template-columns: 1fr; }
+  .rail { position: static; height: auto; flex-direction: row; overflow-x: auto; }
+  .main { padding: 18px 16px 60px; }
+  .g2, .g3, .g4 { grid-template-columns: 1fr; }
+}
+
+/* ── Panels ──────────────────────────────────────────────────────────────── */
+
+.panel {
+  background: linear-gradient(160deg, var(--panel), var(--pit));
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  padding: 18px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* A hairline of light along the top edge — the brushed-metal cue. */
+.panel::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, hsl(0 0% 100% / 0.09), transparent);
+}
+
+.panel.hot { border-color: hsl(var(--hot) / calc(0.2 + var(--heat) * 0.45)); }
+.panel.flat { background: var(--pit); }
+
+.label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--silver-3);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+:root[lang='fa'] .label { text-transform: none; letter-spacing: 0; font-size: 12px; }
+
+.value { font-size: 27px; font-weight: 600; line-height: 1.1; }
+.value.sm { font-size: 19px; }
+.value.lg { font-size: 40px; }
+.sub { font-size: 12.5px; color: var(--silver-3); margin-top: 5px; }
+
+.gain { color: var(--gain); }
+.loss { color: var(--loss); }
+.warn { color: var(--warn); }
+.dim { color: var(--silver-3); }
+
+/* ── Controls ────────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 17px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--rule-2);
+  background: var(--panel-2);
+  font-weight: 600;
+  font-size: 13.5px;
+  transition: all 0.16s var(--ease);
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) { border-color: var(--silver-4); background: #1b202b; }
+.btn:disabled { opacity: 0.38; cursor: not-allowed; }
+
+.btn.primary {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+.btn.primary:hover:not(:disabled) { background: hsl(var(--cool) / 0.22); }
+
+.btn.danger { background: rgba(244, 67, 108, 0.12); border-color: rgba(244, 67, 108, 0.4); color: var(--loss); }
+.btn.danger:hover:not(:disabled) { background: rgba(244, 67, 108, 0.2); }
+
+.btn.ghost { background: transparent; border-color: var(--rule); }
+
+.navitem {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  color: var(--silver-2);
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.15s var(--ease);
+  border: 1px solid transparent;
+}
+.navitem:hover { background: var(--panel); color: var(--silver); }
+.navitem.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent-line);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--rule-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--silver-2);
+}
+.chip.live { border-color: rgba(52, 211, 153, 0.45); color: var(--gain); background: rgba(52, 211, 153, 0.08); }
+.chip.real { border-color: rgba(244, 67, 108, 0.5); color: var(--loss); background: rgba(244, 67, 108, 0.1); }
+.chip.lab { border-color: rgba(96, 165, 250, 0.4); color: var(--info); background: rgba(96, 165, 250, 0.08); }
+
+.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.dot.pulse { animation: pulse 2s var(--ease) infinite; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 currentColor; }
+  50% { opacity: 0.65; box-shadow: 0 0 0 5px transparent; }
+}
+
+/* ── Tables ──────────────────────────────────────────────────────────────── */
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: start;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--silver-3);
+  font-weight: 600;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--rule);
+}
+:root[lang='fa'] th { text-transform: none; letter-spacing: 0; font-size: 12px; }
+td { padding: 10px; border-bottom: 1px solid var(--rule); }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: rgba(255, 255, 255, 0.018); }
+.num { text-align: end; font-variant-numeric: tabular-nums; font-family: var(--font-mono); font-size: 12px; }
+
+/* ── Motion ──────────────────────────────────────────────────────────────── */
+
+.rise { animation: rise 0.4s var(--ease) both; }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(9px); }
+  to { opacity: 1; transform: none; }
+}
+
+.fade { animation: fade 0.3s var(--ease) both; }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--rule-2); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: var(--silver-4); }

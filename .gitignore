@@ -1,22 +1,31 @@
+# Secrets. The .env file holds live API keys.
 .env
 .env.*
 !.env.example
+secrets/
+*.key
+*.pem
+
+# Python
 __pycache__/
 *.py[cod]
 .venv/
 venv/
-node_modules/
-.next/
-dist/
-build/
-*.log
-data/
-parquet/
-mlruns/
+*.egg-info/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+
+# Node
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Runtime state. Calibration results live here; losing them means the dial
+# correctly reverts to "not measured" rather than inventing a number.
+data/
+*.log
+
 .DS_Store
-secrets/
-*.key
-*.pem

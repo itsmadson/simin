@@ -1,173 +1,299 @@
-# Simin · سیمین
+# سیمین · Simin
 
-**An open-source, research-first adaptive crypto trading platform.**
-Backtest → Paper → (gated) Live. Persian & English. Honest about what works.
-
-> **Status: phases 0–11 implemented.** Data engine, feature/regime engine, event-driven backtester, risk engine, meta-labeling ML, walk-forward + Monte Carlo, Go/No-Go gates, paper trading, dashboard. 208 tests. Live trading is disabled and gated.
+**A crypto trading bot with one control: a risk dial from 1 to 10.**
+Two modes — `lab` and `real`. Intraday trading on price action, RSI, MACD,
+oscillation and market structure. Persian and English.
 
 ---
 
-## Read this first (the honest part)
+## The honest part, first
 
-- **Simin will not make you rich quickly.** A target of +200%/month compounds to 531,441× per year. Nobody has ever done that sustainably. Chasing it requires leverage that guarantees eventual ruin. Simin treats that number as a hypothesis to test and expects to report it as unachievable. See [`docs/01-research.md` §0.3](docs/01-research.md).
-- **Most retail bots lose to fees and spread, not to bad indicators.** Round-trip cost on Iranian venues is ~0.5–1.2%. Every strategy is judged net of that, and again at 2× that.
-- **A Toman-denominated profit may be pure Rial devaluation, not trading skill.** Simin reports PnL in **both IRT and USDT** and benchmarks against simply holding USDT.
-- **If the ML adds nothing, it ships disabled** and the README says so. No fake AI.
-- **Live trading is disabled by default** behind 12 automated gates plus human approval.
+You asked for a bot that returns **40% a month at risk 5** and **200% a month at
+risk 10**. The dial has all ten levels and levels 5 and 10 carry exactly those
+targets. Here is what you need to know about them before anything else.
 
-## ⚠️ Legal / operational notice
+**Those numbers are targets, not forecasts, and the software treats them that
+way everywhere.** +200%/month compounds to about 531,000× in a year. No fund,
+desk, or individual has ever sustained it. Level 10 exists because you asked for
+a full 1–10 range, and it is configured to genuinely try — 5% risked per trade,
+10× leverage, 5-minute candles, almost no entry filter.
 
-On 2026-06-02, OFAC designated Nobitex, Wallex, Bitpin and Ramzinex to the SDN list ([U.S. Treasury](https://home.treasury.gov/news/press-releases/sb0598)). Consequences for this project are analysed in [`docs/04-exchanges-iran.md`](docs/04-exchanges-iran.md).
+**So every target ships next to its measurement.** Run `simin calibrate` and the
+system walks each level forward over real history, resamples the trades several
+thousand times, and writes back what the level *actually did*: median monthly
+return, the 5th and 95th percentile outcomes, median and worst-case drawdown,
+and the probability of hitting the drawdown halt. The UI draws both on the same
+dial — the target as a hollow dashed arc, the measurement as a solid one — and
+hatches the space between them. That space is the product.
 
-This repository ships **no credentials and no adapters to designated venues**. The core is venue-agnostic; it includes a paper adapter, a backtest replay adapter, and read-only public market-data adapters. Anyone operating this software is responsible for complying with the laws that apply to them. Simin contains no functionality intended to evade sanctions or compliance controls, and pull requests adding such functionality will be rejected.
+**When a level has never been measured, it says so.** The API returns `null`,
+not `0`, and the interface renders "not measured yet". A zero shown where a
+measurement belongs is the exact failure this design exists to prevent.
+
+On the synthetic data shipped for the offline demo, the calibration currently
+reports something like this — your own numbers on real history will differ, and
+you should run it yourself:
+
+| Level | Target/month | Measured/month | Median DD | Risk of ruin |
+|------:|-------------:|---------------:|----------:|-------------:|
+| 2 | +4% | +0.67% | 2.1% | 0.1% |
+| 4 | +12% | +1.99% | 8.5% | 5.7% |
+| 5 | +20% | −0.29% | 26.1% | 75.0% |
+| 7 | +50% | +5.47% | 30.9% | 54.2% |
+| 10 | +200% | −9.19% | 80.4% | 97.0% |
+
+That is the system working correctly. A bot that reported +200% here would be
+lying to you.
+
+---
 
 ## Quick start
 
 ```bash
-docker compose up -d
+docker compose up
 ```
 
-That is the whole setup. It starts Postgres and Redis, creates the schema, downloads real
-market history, launches the API and dashboard on <http://localhost:8000>, and starts paper
-trading against live data. No `.env` is required — every setting has a working default, and
-paper mode cannot place a real order.
+Open <http://localhost:3000>. It starts in **lab** mode on the **offline** venue
+with generated data, so it runs with no credentials, no API keys, and no network
+to any exchange. Turn the dial, press start, and watch it trade on a compressed
+clock — one candle every three seconds.
 
-Useful overrides:
+Nothing in that path can spend money.
+
+## What it trades on
+
+Six strategies, each built for a specific market condition and muted when the
+market is not in it. A mean-reversion system screaming "buy" in a freight-train
+downtrend must not be allowed to open the trade.
+
+| Strategy | Regime | Idea |
+|---|---|---|
+| `oscillation` | range | Fades stretched price back to the mean: Bollinger extreme + RSI + z-score + a rejection candle at a tested level |
+| `trend_pullback` | trend | Buys dips inside a confirmed uptrend — EMA stack, ATR-measured pullback depth, RSI reset, structure intact |
+| `macd_momentum` | trend | MACD crossovers filtered by the 200 EMA and by whether the histogram is actually expanding |
+| `breakout` | any | Break of market structure out of a Bollinger-inside-Keltner squeeze, confirmed by volume |
+| `rsi_divergence` | any | Price makes a new extreme, RSI does not — but only enters on a change of character |
+| `stoch_scalp` | range | Fast stochastic reversals for the low-timeframe levels, with a hard cost gate |
+
+They vote. Agreement produces a confidence score; disagreement lowers it; the
+dial's `min_confluence` decides whether what remains clears the bar. That
+threshold is the entire link between the risk number you pick and how often the
+bot trades.
+
+Under them sits a full price-action layer: fractal swing points, market
+structure (BOS and CHoCH), clustered support/resistance, and thirteen scored
+candlestick patterns — scored rather than boolean, because a 4:1 pin bar at a
+four-times-tested level is not the same trade as a 2:1 pin bar in the middle of
+nowhere.
+
+## What the dial actually changes
+
+Picking a level fixes twenty-odd parameters at once:
+
+| | L1 Vault | L4 Balanced | L7 Aggressive | L10 Ruin Or Riches |
+|---|---|---|---|---|
+| Risk per trade | 0.25% | 1.0% | 2.5% | 5.0% |
+| Max leverage | 1× | 2× | 5× | 10× |
+| Signal timeframe | 4h | 2h | 15m | 5m |
+| Entry threshold | 0.80 | 0.60 | 0.46 | 0.34 |
+| Trades per day | 1 | 4 | 14 | 40 |
+| Stop | 3.0 × ATR | 2.2 × ATR | 1.6 × ATR | 1.0 × ATR |
+| Drawdown halt | 6% | 15% | 30% | 50% |
+| Shorts | no | yes | yes | yes |
+
+Higher risk means a looser filter, tighter stops, faster candles and more
+trades. That is what "more risk" mechanically *is*, and the tests assert the
+curve moves monotonically in both directions.
+
+## Position sizing
+
+One identity does the real work:
+
+```
+position size = (equity × risk_per_trade) / distance to stop
+```
+
+A wide stop gets a small position; a tight stop gets a large one; the loss if
+the stop is hit is the same either way. Sizing from *equity* rather than cash
+means the account de-risks automatically in a drawdown — lose 20% and every
+subsequent position is 20% smaller, which turns a losing streak into a decaying
+curve instead of a straight line to zero.
+
+Leverage is used only when a position's notional exceeds free margin, never
+because the dial permits it. And if the venue would liquidate before the stop is
+reached, the trade is **refused** — a stop that can never execute is decoration,
+and the loss behind it is unbounded.
+
+## Circuit breakers
+
+| Breaker | Behaviour |
+|---|---|
+| Daily loss halt | Stops opening positions; lifts at the next UTC day |
+| Drawdown halt | Flattens everything and stops; needs a human to clear |
+| Loss streak | Halves position size until a winner breaks the streak |
+| Kill switch | Closes all positions, disables trading until restart |
+| Capital cap | `SIMIN_MAX_CAPITAL` bounds notional independently of the dial |
+
+## Lab mode
 
 ```bash
-SIMIN_API_PORT=8010 docker compose up -d              # port 8000 already taken
-SIMIN_BOOTSTRAP_SYMBOLS="BTCUSDT ETHUSDT" \
-SIMIN_BOOTSTRAP_START=2020-01-01 docker compose up -d  # different history
-SIMIN_PG_IMAGE=timescale/timescaledb:latest-pg16 docker compose up -d   # hypertables
-docker compose build --build-arg PIP_INDEX_URL=<mirror>  # if pypi.org is unreachable
+simin backtest --level 7 --venue coinex --symbols BTCUSDT ETHUSDT --bars 8000
+simin calibrate --level 0     # measure every level
+simin dial                    # print target beside measurement
+simin explain 7               # everything one level does
 ```
 
-TimescaleDB is used when the image provides it and skipped when it does not; the schema and
-results are identical either way.
+Every backtest reports the return, **buy-and-hold over the same window**, and
+**the same strategy at doubled costs** — because a return means nothing until
+you know what simply holding would have done, and a strategy that dies when fees
+double was never profitable, only lucky about liquidity.
 
-Then run the research pipeline:
+Then thirteen validation gates run, and they can fail a run that made money:
+sample size, profit factor, expectancy, drawdown within the dial, survival at 2×
+costs, cost drag, beating buy-and-hold, walk-forward consistency, in-sample
+degradation, ruin risk, and median Monte Carlo outcome.
+
+### Why the backtest is trustworthy
+
+The bar loop is strictly ordered, and the order is the point:
+
+1. Fill entries decided on the **previous** bar, at **this** bar's open.
+2. Mark open positions against this bar's high/low/close; exit if hit.
+3. Evaluate strategies against this bar's **close**.
+4. Queue any entry for the **next** bar.
+
+That one-bar delay is what a real bot experiences — you cannot see a candle
+close and simultaneously trade at that close. Within a bar, when both stop and
+target were touched, the **stop is assumed to have come first**; OHLC does not
+record the intrabar path, and assuming the favourable one is how a losing system
+backtests profitably. A stop that gapped through fills at the open, not at the
+stop price, which is the difference between a modelled −1R and a real −4R.
+
+`tests/test_causality.py` proves it: it replays history, replaces everything
+after bar 1200 with a violent crash, and asserts every trade that closed before
+the cutoff is byte-identical. That test has already caught one real bug —
+support/resistance levels were being computed over the whole dataset and handed
+to every bar, letting a strategy at bar 500 place its stop against a level that
+would not form until bar 1800.
+
+## Real mode
+
+Real trading is behind **five** separate deliberate acts:
+
+1. `SIMIN_MODE=real`
+2. Real API credentials for the venue
+3. `SIMIN_REAL_MODE_ACKNOWLEDGED=1` — no default, ever
+4. `SIMIN_MAX_CAPITAL` greater than zero
+5. Typing `I understand this trades real money` verbatim in the UI
+
+Any adapter that cannot place real orders reports `can_trade = False`, and the
+runner refuses to start real mode against it. Lab mode *always* returns a
+simulated adapter regardless of which venue you pick.
 
 ```bash
-docker compose exec api python -m simin.cli research \
-  --symbol BTCUSDT --symbol-id 1 --timeframe 4h --strategy trend_follow --start 2022-01-01
+# .env — never commit this
+SIMIN_MODE=real
+SIMIN_VENUE=coinex
+SIMIN_COINEX_KEY=...
+SIMIN_COINEX_SECRET=...
+SIMIN_REAL_MODE_ACKNOWLEDGED=1
+SIMIN_MAX_CAPITAL=500
 ```
 
-It prints in-sample, out-of-sample and 2×-cost results, every benchmark, every walk-forward
-window, a Monte Carlo distribution, and the 12-gate verdict — and exits non-zero unless every
-gate passes.
+Credentials are read from the environment only. They are never sent to the
+browser, never written to disk, and never logged — the settings endpoint reports
+only *whether* a venue is configured.
 
-## The app
+## Venues
 
-`docker compose up -d`, then <http://localhost:8000>.
+| Venue | Futures | Leverage | Quote | Round-trip cost |
+|---|---|---|---|---|
+| `offline` | yes | 10× | USDT | synthetic — demo only |
+| `paper` | yes | 10× | USDT | 0.20% |
+| `coinex` | yes | 10× | USDT | 0.20% |
+| `nobitex` | **no** | 1× | IRT | 0.96% |
+| `wallex` | **no** | 1× | IRT | 1.10% |
 
-**LAB vs REAL.** The mode badge is always visible in the header. LAB covers backtest and paper
-trading; REAL is locked and cannot be unlocked from the UI — see the Go Live page for the
-twelve gates and the Wallet page for what connecting real funds actually requires.
+**Iranian venues are spot only.** Running a level-9 profile there would be a
+completely different bot, so the dial is *clamped* — leverage forced to 1×,
+shorts disabled — and a visible warning is attached. The bot never pretends
+leverage was applied.
 
-| Page | What it is for |
-|---|---|
-| **Overview** | equity, drawdown, realized/unrealized PnL, fees, equity curve, live activity feed |
-| **Positions** | open and closed tabs, entry, stop, strategy, regime, realized PnL |
-| **Signals & Orders** | every signal a strategy produced and every order that followed, including rejections and why |
-| **Market** | current regime per symbol with the features behind it, and whether trading is permitted |
-| **Performance** | PnL by strategy, by symbol, by regime |
-| **Lab** | run a backtest from the browser: pick symbol, timeframe, strategy, risk profile, 1× or 2× cost, regime filter on/off. Returns the full metric set and every benchmark side by side. Read-only — the Lab cannot open a position |
-| **Data** | stored history coverage per symbol and timeframe |
-| **Wallet** | set the paper balance; see venue costs; see exactly what real-money connection requires |
-| **Go Live** | the 12 gates with live evidence, plus the target reality check |
-| **Settings** | risk profile, active risk limits, data source |
+**Toman profit is not necessarily profit.** The Rial has lost value against the
+dollar for years, and turning 100M Toman into 130M during a 30% devaluation is
+not a gain. The Iranian adapter exposes the USDT/IRT rate so PnL can be read in
+both. It also converts Rial to Toman at the boundary — the API quotes Rial, the
+country thinks in Toman, and mixing them is a 10× error in every price on screen.
 
-**On connecting real money.** The Wallet page shows the status of a real venue connection but
-does not accept credentials, by design. Keys arrive through the environment or a Docker
-secret, never through a web form and never into the database — an endpoint that accepts a
-withdrawal-capable key is a liability, not a feature. The repository also ships no adapter for
-any sanctioned venue (see [`docs/04`](docs/04-exchanges-iran.md)); that adapter is an
-operator-installed plugin.
+Note the cost column. At 0.96% round trip on Nobitex, a strategy needs to clear
+almost 1% per trade before it has made anything at all, which is why the
+low-timeframe dial levels are close to unusable on Iranian venues. The software
+will let you run them and will show you the measurement.
 
-## Real results (not a simulation of results)
+## The interface
 
-Binance spot, 2022-01-01 → 2026-08-23, 4h bars, aggressive risk profile, Iranian-venue cost
-model (~1.1% round trip). 152,000+ real bars loaded through the pipeline.
+Next.js 15, Morabba typeface, Persian-first with real RTL and an English toggle.
 
-| Symbol | Strategy | Trades | Return | Sharpe | MaxDD | Fees as % of gross |
-|---|---|---:|---:|---:|---:|---:|
-| BTC | buy_and_hold | — | **+62.6%** | 0.46 | −67.2% | 0% |
-| BTC | donchian_breakout | 21 | +7.0% | 0.41 | −6.1% | 19% |
-| BTC | trend_follow | 93 | −9.5% | −0.34 | −14.9% | 31% |
-| BTC | rsi_oversold | 19 | −12.5% | −1.23 | −12.5% | **159%** |
-| BTC | range_mean_reversion | 101 | −24.3% | −1.69 | −25.1% | 73% |
-| ETH | buy_and_hold | — | −34.8% | 0.19 | −76.2% | 0% |
-| ETH | best strategy (donchian) | 20 | −2.0% | −0.12 | −6.5% | 27% |
-| SOL | buy_and_hold | — | −45.4% | 0.33 | −95.1% | 0% |
-| SOL | best strategy (vol_breakout) | 2 | +3.0% | 0.93 | −0.6% | 2% |
+The design is one instrument: brushed silver on near-black, with a single
+variable — `--heat` — driven by the dial position. Turn the risk up and the
+entire interface warms from silver-cyan through amber to crimson. It is not
+decoration; it is the primary signal that the machine has been made more
+dangerous, applied everywhere at once so it cannot be dismissed as one red label.
 
-**What this says, plainly:**
+Two things it does that most trading UIs do not:
 
-1. **No strategy here beat buying and holding BTC.** The best one made 7% while BTC made 62%.
-2. **Fees ate everything.** Textbook RSI paid 159% of its gross profit in fees — it made money
-   before costs and lost money after. That is the entire story of most retail bots.
-3. **The strategies did protect capital.** Buy-and-hold survived a −67% (BTC), −76% (ETH) and
-   −95% (SOL) drawdown. The systematic strategies stayed under −25%. Losing less is worth more
-   than it sounds.
-4. `simin research` on BTC 4h returns **NO-GO**: 38% walk-forward consistency, deflated Sharpe
-   0.14, negative at 2× cost. The system correctly refuses to green-light itself.
+**The honesty gap.** The target and measured arcs are drawn on the same track
+with the difference hatched between them. You see the exaggeration rather than
+reading it out of a table.
 
-Nothing here is tuned. That is deliberate — these are the honest baseline numbers a real edge
-would have to beat, and publishing them first is what makes any later improvement believable.
+**The position risk axis.** Liquidation, stop, entry, current price and target
+are placed *to scale* on one line. At 8× leverage the liquidation price is 12%
+away and the stop is 2% away — as four numbers in a row those look similar; on a
+shared axis the difference is immediate.
 
-## What is built
+The live view also shows what the ensemble decided for every symbol on the last
+bar, **including the ones it chose not to trade and why**. A bot that only shows
+its trades is a bot you cannot supervise.
 
-| Area | Status |
-|---|---|
-| Domain types, data quality, backfill | Timescale schema, idempotent resumable backfill, gap/staleness detection |
-| Feature + regime engine | ~20 causal features, strict as-of multi-timeframe join, regime state machine + playbook |
-| Backtester | event-driven, T+1 fills, spread + sqrt impact + latency, stop-before-target, depth-capped sizing |
-| Risk engine | vol-scaled sizing, drawdown throttles, correlated-beta cap, venue cap, latching circuit breakers |
-| Strategies | 4 strategies + 4 benchmarks incl. random-entry (isolates signal from sizing) |
-| ML | triple-barrier labels, purged/embargoed CV, PBO, logistic baseline + LightGBM, calibration |
-| Validation | walk-forward, Monte Carlo, deflated Sharpe, 12 Go/No-Go gates |
-| Paper trading | paper adapter with idempotent orders + partial fills, single-leader trader loop |
-| Dashboard | 10-page app: sidebar nav, Overview, Positions, Signals & Orders, Market, Performance, Lab, Data, Wallet, Go Live, Settings — bilingual fa/en with full RTL, no build step, no external requests |
-| Session records | Every signal, order, fill, position, equity mark and risk event is written to Postgres, so the UI shows what happened rather than a reconstruction |
+## Layout
 
-## Documentation
+```
+backend/src/simin/
+  core/types.py          Decimal money, TF, Candle, Position, Trade
+  config.py              settings; real mode has no default
+  risk/dial.py           THE DIAL — ten profiles, every parameter
+  risk/engine.py         sizing, guards, circuit breakers, trailing stops
+  indicators/core.py     RSI, MACD, ATR, Bollinger, ADX, Stochastic, Supertrend…
+  indicators/features.py 35 features per bar, warm-up as None
+  priceaction/           swings, BOS/CHoCH, S/R levels, 13 scored patterns
+  strategies/            six strategies + the confluence ensemble
+  exchanges/             base, paper, replay, coinex, iranian, registry, costs
+  lab/                   backtester, metrics, walk-forward, Monte Carlo, gates
+  execution/runner.py    the live bot loop
+  api/app.py             FastAPI + WebSocket
+frontend/
+  app/                   dial · live · lab · markets · settings
+  components/            RiskDial, PositionCard, Shell
+```
 
-| Doc | Contents |
-|---|---|
-| [01 — Deep Research](docs/01-research.md) | indicator ranking after costs, ML benchmark verdict, regime detection, timeframes, feature set, cost model |
-| [02 — Architecture](docs/02-architecture.md) | components, tech stack rationale, DB schema, adapter interface, API surface |
-| [03 — Risk & Validation](docs/03-risk-and-validation.md) | risk engine, backtest anti-bias rules, walk-forward, Monte Carlo, **Go/No-Go gates** |
-| [04 — Iranian Exchanges](docs/04-exchanges-iran.md) | API/WS/fee/limit comparison table, sanctions impact, arbitrage reality check |
-| [05 — Roadmap](docs/05-roadmap.md) | 12 phases with hard exit criteria |
-| [06 — Deployment](docs/06-deployment.md) | run it, operate it, and what going live actually requires |
+## Development
 
-## Planned stack
-Python 3.12+ · FastAPI · NumPy · PostgreSQL (TimescaleDB optional) · Redis · Docker Compose. Optional research extras: LightGBM, scikit-learn, Optuna, Polars. The dashboard is a self-contained page with no build step and no external requests.
+```bash
+cd backend && pip install -e ".[dev]" && pytest      # 119 tests
+cd frontend && npm install && npm run dev
+```
 
-## License
-MIT
+## Licence
 
----
+MIT for the code. The **Morabba** typeface in `frontend/public/fonts/` is
+proprietary — see `moraba/FontLicense.txt` and <https://fontiran.com>. It is
+bundled here for your own use; check the licence before redistributing.
 
-<div dir="rtl">
+## Final word
 
-# سیمین
+Trading is not a solved problem, and this software will not solve it for you.
+What it will do is refuse to lie to you about what it is doing: it measures
+instead of promising, it counts every fee, it assumes the bad fill, and when a
+configuration fails validation it says so on the screen while it runs.
 
-**پلتفرم متن‌باز معاملات الگوریتمی ارز دیجیتال، با اولویت پژوهش.**
-بک‌تست ← معامله کاغذی ← معامله واقعی (فقط پس از عبور از دروازه‌های سخت‌گیرانه). دوزبانه فارسی/انگلیسی.
-
-> **وضعیت: فاز ۱ — پژوهش و معماری.** هنوز کد معاملاتی نوشته نشده است.
-
-## بخش صادقانه
-
-- **سیمین شما را سریع ثروتمند نمی‌کند.** هدف ۲۰۰٪ در ماه یعنی ۵۳۱٬۴۴۱ برابر شدن سرمایه در یک سال. چنین چیزی هرگز به‌صورت پایدار محقق نشده و رسیدن به آن نیازمند اهرمی است که ورشکستگی را قطعی می‌کند. این عدد به‌عنوان یک فرضیه آزمایش می‌شود و به احتمال بسیار زیاد «غیرقابل دستیابی» گزارش خواهد شد.
-- **بیشتر ربات‌های معاملاتی به‌خاطر کارمزد و اسپرد شکست می‌خورند، نه اندیکاتور بد.** هزینه رفت‌وبرگشت در صرافی‌های ایرانی حدود ۰٫۵ تا ۱٫۲ درصد است. هر استراتژی پس از کسر این هزینه و همچنین در حالت دو برابر هزینه ارزیابی می‌شود.
-- **سود تومانی ممکن است صرفاً کاهش ارزش ریال باشد، نه مهارت معاملاتی.** سیمین سود و زیان را هم به تومان و هم به تتر گزارش می‌کند و آن را با «صرفاً نگه‌داشتن تتر» مقایسه می‌کند.
-- **اگر هوش مصنوعی ارزش افزوده‌ای نداشته باشد، غیرفعال ارائه می‌شود** و همین در مستندات نوشته می‌شود. هوش مصنوعی تزئینی نداریم.
-- **حالت معامله واقعی به‌صورت پیش‌فرض غیرفعال است** و پشت ۱۲ دروازه خودکار به‌علاوه تأیید انسانی قرار دارد.
-
-## هشدار حقوقی
-
-در تاریخ ۱۲ خرداد ۱۴۰۵ (۲۰۲۶-۰۶-۰۲) دفتر OFAC آمریکا صرافی‌های نوبیتکس، والکس، بیت‌پین و رمزینکس را در فهرست SDN قرار داد. تحلیل پیامدهای فنی و عملیاتی آن در `docs/04-exchanges-iran.md` آمده است. این مخزن هیچ کلید API و هیچ آداپتوری برای این صرافی‌ها منتشر نمی‌کند؛ هسته سیستم مستقل از صرافی است. مسئولیت رعایت قوانین بر عهده کاربر است.
-
-</div>
+Use lab mode for a long time first.
