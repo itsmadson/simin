@@ -34,6 +34,7 @@ const NAV = [
   { href: '/', key: 'dial' as const, glyph: '◉' },
   { href: '/live', key: 'live' as const, glyph: '◈' },
   { href: '/lab', key: 'lab' as const, glyph: '⬡' },
+  { href: '/universe', key: 'universe' as const, glyph: '⁂' },
   { href: '/markets', key: 'markets' as const, glyph: '◇' },
   { href: '/settings', key: 'settings' as const, glyph: '⚙' },
 ];

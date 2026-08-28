@@ -14,6 +14,7 @@ export const DICT = {
   dial: { en: 'Risk Dial', fa: 'درجهٔ ریسک' },
   live: { en: 'Live', fa: 'زنده' },
   lab: { en: 'Lab', fa: 'آزمایشگاه' },
+  universe: { en: 'Universe', fa: 'جهان معاملاتی' },
   markets: { en: 'Markets', fa: 'بازارها' },
   settings: { en: 'Settings', fa: 'تنظیمات' },
 

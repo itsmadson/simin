@@ -90,6 +90,114 @@ want a faster cadence (level 7 is 15m, level 9 is 5m).
 If port 8000 is already taken on your machine, set `SIMIN_API_PORT=8010` and
 `SIMIN_PUBLIC_API_URL=http://localhost:8010` in `.env`.
 
+## Which markets, and is any of it real?
+
+Three commands, in the order the questions actually arise.
+
+### 1. Capacity — what can this account trade?
+
+```bash
+simin universe --venue coinex --equity 10000 --position 3000
+```
+
+Walks the **real order book** for every listed market rather than trusting
+turnover, because turnover is a headline one whale and a hundred bots can
+manufacture, and depth is what your order actually meets. KASUSDT shows healthy
+24h volume and costs 0.16% in slippage on a *thousand-dollar* order — most of a
+round trip gone before the trade has an opinion.
+
+On CoinEx futures, at $3,000 a position:
+
+```
+Scanned 223 markets at $3,000 per position (equity $10,000)
+23 tradeable, 200 excluded
+
+market           turnover/24h    range     slip  round trip   cover
+BTCUSDT           133,348,518   3.22%   0.001%     0.102%    31.7
+ETHUSDT            58,671,676   2.31%   0.002%     0.104%    22.3
+HYPEUSDT           10,999,927   5.61%   0.011%     0.123%    45.8
+DOGEUSDT            6,288,887   5.45%   0.000%     0.100%    54.5
+...
+Excluded:  thin 196   too_expensive 3   stable 1
+```
+
+**The answer is account-specific**, which is the whole point. A market that is
+untradeable at $50,000 is perfectly fine at $500, so the position size is an
+input — and "this coin is illiquid" without naming a size says nothing.
+
+### 2. Correlation — how many bets is that really?
+
+```bash
+simin portfolio --venue coinex
+```
+
+```
+22 markets, average pairwise correlation 0.55, which is 1.8 genuinely
+independent bets. Holding all 22 at once hurts 3.5x more in a correlated move
+than position count suggests.
+
+  BTCUSDT carries 5 more at rho 0.79: ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT, LINKUSDT
+```
+
+BTC, ETH, SOL, XRP, DOGE and LINK run 0.75–0.86 with each other. They are one
+asset wearing six tickers. Twenty positions in that basket is one position
+paying twenty sets of fees, sized as though the risk were spread — which is how
+an account that looks diversified takes a six-fold hit on a bad Tuesday.
+Effective breadth is `N² / ΣΣρ`, and the bot takes one position per cluster.
+
+### 3. Significance — is any of it edge?
+
+```bash
+simin screen --venue coinex --level 4
+```
+
+This is the one that matters. Searching 22 markets for the best one is how
+people find noise: **the maximum of many draws is large by construction.** Give
+230 zero-edge coin-flip strategies a backtest and the luckiest will post an
+annualised Sharpe near 2.8. Reporting that as a discovery is not optimism, it is
+a category error.
+
+So the screener applies a **deflated Sharpe ratio** (Bailey & López de Prado)
+against the number of trials actually run, corrects for the skew and fat tails
+that inflate a naive Sharpe, and separately bootstraps the same strategies over
+block-shuffled returns to get an **empirical null** — what they score on data
+with the structure removed.
+
+Over 416 days of real CoinEx data at level 4:
+
+```
+Screened 22 markets on 2h, risk level 4
+Correcting for 22 trials. Null Sharpe p95 = +0.08
+
+market        trades  SR/trade   ann.SR   return   maxDD    DSR   >null  verdict
+TRUMPUSDT         83     0.193     2.00   19.0%    4.6%   0.42   100%  ----
+WLDUSDT           79     0.143     1.11   11.9%    4.2%   0.24   100%  ----
+SUIUSDT           60     0.122     0.25    9.0%    3.9%   0.15   100%  ----
+...
+BTCUSDT           73    -0.001    -0.26   -1.7%    5.5%   0.03    67%  ----
+PUMPUSDT          58    -0.369    -3.22  -16.8%    7.5%   0.00    27%  ----
+
+Nothing survived. 22 configurations were tested; the best results are
+consistent with luck, and none of them should be traded.
+```
+
+TRUMPUSDT looks excellent — +19%, annualised Sharpe 2.00. Deflated for having
+tested 22 markets: **0.42**. Ten of 22 positive, twelve negative. That is a coin
+flip, and the naive read ("TRUMP made 19%, trade TRUMP") is precisely the
+expensive mistake.
+
+**A screener that returns "nothing survived" is working.** That will be the
+usual outcome and it is worth far more than a ranked list of lucky coins.
+
+The statistics are tested rather than asserted — `tests/test_research.py`
+verifies 0% false positives across 120 searches over pure noise, where an
+uncorrected read fires ~100% of the time, while still detecting a genuine
+0.3R-per-trade edge.
+
+If you screen several risk levels and report the best, pass `--extra-trials` so
+the bar rises accordingly. Searching more and correcting for less is how the
+correction gets defeated.
+
 ## What it trades on
 
 Six strategies, each built for a specific market condition and muted when the

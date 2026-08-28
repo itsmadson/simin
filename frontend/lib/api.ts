@@ -285,6 +285,79 @@ export interface BacktestResult {
   cost_model: { round_trip: number; breakeven_move: number; venue: string };
 }
 
+export interface MarketScore {
+  symbol: string;
+  verdict: string;
+  reason: string;
+  turnover: number;
+  daily_range: number;
+  /** Null when depth was unavailable. Treat as unknown, never as free. */
+  slippage: number | null;
+  round_trip: number;
+  edge_ratio: number;
+  bars: number;
+  score: number;
+  max_leverage: number;
+  tradeable: boolean;
+}
+
+export interface UniverseReport {
+  scanned: number;
+  equity: number;
+  position_notional: number;
+  scanned_at: string;
+  tradeable_count: number;
+  rejection_summary: Record<string, number>;
+  markets: MarketScore[];
+}
+
+export interface ScreenResult {
+  symbol: string;
+  trades: number;
+  /** Annualised — display only. */
+  sharpe: number;
+  /** Per-trade. This is what the correction actually tests. */
+  trade_sharpe: number;
+  total_return: number;
+  monthly_return: number;
+  max_drawdown: number;
+  profit_factor: number;
+  expectancy_r: number;
+  win_rate: number;
+  oos_consistency: number;
+  degradation: number;
+  skew: number;
+  kurtosis: number;
+  /** Probability this is skill rather than the luckiest of N trials. */
+  dsr: number;
+  null_percentile: number;
+  null_sharpe_p95: number;
+  survived: boolean;
+  failed_because: string;
+}
+
+export interface ScreenReport {
+  risk_level: number;
+  timeframe: string;
+  trials: number;
+  screened_at: string;
+  survivors: number;
+  null_sharpe_p95: number;
+  verdict: string;
+  results: ScreenResult[];
+}
+
+export interface PortfolioReport {
+  symbols: string[];
+  average_correlation: number;
+  effective_breadth: number;
+  concentration_multiplier: number;
+  clusters: Array<{ members: string[]; cohesion: number; representative: string }>;
+  selected: string[];
+  summary: string;
+  matrix: Record<string, Record<string, number>>;
+}
+
 // ── Endpoints ──────────────────────────────────────────────────────────────
 
 export const api = {
@@ -348,6 +421,36 @@ export const api = {
       levels: Array<{ price: number; touches: number; strength: number; kind: string }>;
       structure: string;
     }>(`/api/candles?symbol=${symbol}&timeframe=${timeframe}&limit=${limit}`),
+
+  universe: (body: {
+    venue: string;
+    equity: number;
+    position_notional: number;
+    timeframe?: string;
+    max_markets?: number;
+  }) => post<UniverseReport>('/api/lab/universe', body),
+
+  screen: (body: {
+    risk_level: number;
+    venue: string;
+    symbols?: string[];
+    timeframe?: string;
+    equity: number;
+    position_notional: number;
+    top?: number;
+    bars?: number;
+    null_runs?: number;
+    extra_trials?: number;
+  }) => post<ScreenReport>('/api/lab/screen', body),
+
+  portfolio: (body: {
+    venue: string;
+    symbols?: string[];
+    timeframe?: string;
+    bars?: number;
+    threshold?: number;
+    max_positions?: number;
+  }) => post<PortfolioReport>('/api/lab/portfolio', body),
 
   backtest: (body: {
     risk_level: number;
