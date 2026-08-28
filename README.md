@@ -57,6 +57,7 @@ produces them will not.
 ## Quick start
 
 ```bash
+cp .env.example .env    # optional; every value already has a working default
 docker compose up
 ```
 
@@ -66,6 +67,28 @@ to any exchange. Turn the dial, press start, and watch it trade on a compressed
 clock — one candle every three seconds.
 
 Nothing in that path can spend money.
+
+### Lab mode on real prices
+
+Better than the offline demo, and still simulated money: point it at CoinEx.
+
+```bash
+SIMIN_VENUE=coinex docker compose up
+```
+
+No credentials needed — CoinEx market data is public, and lab mode always wraps
+it in an adapter that reports `can_trade = False`. The status line then reads
+`coinex (paper)` rather than just `paper`, so it is never ambiguous whether you
+are looking at real prices or generated ones.
+
+One thing to expect: at risk level 4 the signal timeframe is **2h**, so the bot
+decides once every two hours and will sit still in between. That is correct
+behaviour, not a hang — it refuses to act on a candle that has not closed. Use
+the **Lab** tab if you want results immediately, or a higher dial level if you
+want a faster cadence (level 7 is 15m, level 9 is 5m).
+
+If port 8000 is already taken on your machine, set `SIMIN_API_PORT=8010` and
+`SIMIN_PUBLIC_API_URL=http://localhost:8010` in `.env`.
 
 ## What it trades on
 
