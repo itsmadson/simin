@@ -222,10 +222,12 @@ class Runner:
         self.error = ""
         self._emit(
             "start", "",
-            f"Bot starting: {self.settings.mode.value} mode on {self.exchange.display_name}, "
+            f"Bot starting: {self.settings.mode.value} mode on "
+            f"{getattr(self.exchange, 'source_name', self.exchange.name)}, "
             f"risk level {self.profile.level} ({self.profile.name_en})",
             f"ربات در حال شروع: حالت {self.settings.mode.value} روی "
-            f"{self.exchange.display_name}، سطح ریسک {self.profile.level}",
+            f"{getattr(self.exchange, 'source_name', self.exchange.name)}، "
+            f"سطح ریسک {self.profile.level}",
         )
         self._task = asyncio.create_task(self._loop(), name="simin-runner")
 
@@ -691,7 +693,9 @@ class Runner:
         return RunnerStatus(
             state=self.state,
             mode=self.settings.mode,
-            venue=self.exchange.name,
+            # A paper adapter reports where its prices actually come from, so
+            # "CoinEx (paper)" and "offline (paper)" never look the same.
+            venue=getattr(self.exchange, "source_name", self.exchange.name),
             risk_level=self.profile.level,
             profile_name=self.profile.name_en,
             started_at=self.started_at,

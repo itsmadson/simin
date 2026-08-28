@@ -110,6 +110,19 @@ class PaperExchange(Exchange):
         """Used by the live runner to keep the simulated book in step."""
         self._marks[symbol] = price
 
+    @property
+    def source_name(self) -> str:
+        """Where the prices come from.
+
+        Reporting only "paper" hides the thing the user actually chose. A paper
+        account over live CoinEx prices and a paper account over generated data
+        are very different situations, and the status line has to distinguish
+        them or "lab mode" means nothing in particular.
+        """
+        if self._source is None:
+            return self.name
+        return f"{self._source.name} (paper)"
+
     # --- Account ----------------------------------------------------------
 
     async def balances(self) -> dict[str, Balance]:

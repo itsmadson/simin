@@ -461,3 +461,81 @@ class TestPaperLedger:
         qty, _, margin = ex.position_book()["BTCUSDT"]
         assert qty == Decimal("-3")
         assert margin > 0
+
+
+class TestCoinExParsing:
+    """Built from the actual CoinEx v2 response, not from an assumption.
+
+    The first live call against the venue crashed the entire symbol listing,
+    because `leverage` is a list of permitted tiers rather than a single number
+    and `Decimal(str([...]))` raises. No fixture in this repo would have caught
+    it; only pointing the bot at the real API did.
+    """
+
+    #: Trimmed from a real GET /v2/futures/market?market=BTCUSDT.
+    LIVE_ROW = {
+        "base_ccy": "BTC",
+        "base_ccy_precision": 4,
+        "contract_type": "linear",
+        "is_market_available": True,
+        "leverage": ["1", "2", "3", "5", "8", "10", "15", "20", "30", "50", "100"],
+        "maker_fee_rate": "0.0003",
+        "market": "BTCUSDT",
+        "min_amount": "0.0001",
+        "quote_ccy": "USDT",
+        "quote_ccy_precision": 0,
+        "status": "online",
+        "taker_fee_rate": "0.0005",
+        "tick_size": "1",
+    }
+
+    def test_leverage_list_is_read_as_its_maximum(self) -> None:
+        from simin.exchanges.coinex import _max_leverage
+
+        assert _max_leverage(self.LIVE_ROW) == 100
+
+    def test_leverage_accepts_a_scalar_too(self) -> None:
+        from simin.exchanges.coinex import _max_leverage
+
+        assert _max_leverage({"leverage": "20"}) == 20
+        assert _max_leverage({"max_leverage": 5}) == 5
+
+    def test_missing_or_junk_leverage_degrades_to_one(self) -> None:
+        from simin.exchanges.coinex import _max_leverage
+
+        assert _max_leverage({}) == 1
+        assert _max_leverage({"leverage": ["", "x"]}) == 1
+
+    def test_dec_survives_a_non_numeric_field(self) -> None:
+        """One odd field must not take down a whole market listing."""
+        from simin.exchanges.coinex import _dec
+
+        assert _dec("not-a-number", "7") == Decimal("7")
+        assert _dec(None) == Decimal("0")
+        assert _dec("0.0003") == Decimal("0.0003")
+
+    async def test_symbols_parses_the_live_shape(self) -> None:
+        from simin.exchanges.coinex import CoinExExchange
+
+        ex = CoinExExchange()
+        rows = [
+            self.LIVE_ROW,
+            {**self.LIVE_ROW, "market": "OLDUSDT", "base_ccy": "OLD", "status": "delisted"},
+            {**self.LIVE_ROW, "market": "OFFUSDT", "base_ccy": "OFF",
+             "is_market_available": False},
+        ]
+
+        async def fake_request(*a: object, **k: object) -> object:
+            return rows
+
+        ex._request = fake_request  # type: ignore[assignment]
+        symbols = await ex.symbols()
+        await ex.close()
+
+        # Delisted and unavailable markets are dropped: they still list, then
+        # reject every order placed against them.
+        assert [s.name for s in symbols] == ["BTCUSDT"]
+        s = symbols[0]
+        assert s.max_leverage == 100
+        assert s.min_qty == Decimal("0.0001")
+        assert s.qty_precision == 4

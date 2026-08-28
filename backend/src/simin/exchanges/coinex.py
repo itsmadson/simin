@@ -24,7 +24,7 @@ import json
 import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import httpx
@@ -85,7 +85,27 @@ def _dec(value: Any, default: str = "0") -> Decimal:
     """Parse a venue string into Decimal without passing through float."""
     if value is None or value == "":
         return Decimal(default)
-    return Decimal(str(value))
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        # The venue sent something that is not a number at all. Returning the
+        # default beats crashing a whole market listing over one odd field.
+        return Decimal(default)
+
+
+def _max_leverage(row: dict[str, Any]) -> int:
+    """Highest leverage CoinEx allows on this market.
+
+    `leverage` is a *list* of the permitted tiers — ["1","2","3","5",…,"100"] —
+    not a single number. Reading it as a scalar throws `InvalidOperation` and
+    takes down the entire symbol listing, which is how this was found: the first
+    call against the live venue, not against any fixture.
+    """
+    raw = row.get("leverage") or row.get("max_leverage")
+    if isinstance(raw, (list, tuple)):
+        tiers = [int(_dec(x, "1")) for x in raw if str(x).strip()]
+        return max(tiers) if tiers else 1
+    return max(int(_dec(raw, "1")), 1)
 
 
 class CoinExExchange(Exchange):
@@ -217,6 +237,13 @@ class CoinExExchange(Exchange):
             quote = m.get("quote_ccy") or m.get("quote_currency") or "USDT"
             if not base:
                 continue
+            # Skip anything not actually tradeable. A delisted market still
+            # appears in the listing and will accept a symbol lookup, then
+            # reject every order against it.
+            if m.get("status") not in (None, "online"):
+                continue
+            if m.get("is_market_available") is False:
+                continue
             out.append(
                 Symbol(
                     base=base.upper(),
@@ -228,7 +255,7 @@ class CoinExExchange(Exchange):
                     qty_precision=int(m.get("base_ccy_precision", 6) or 6),
                     min_qty=_dec(m.get("min_amount"), "0"),
                     min_notional=_dec(m.get("min_notional"), "0"),
-                    max_leverage=int(_dec(m.get("leverage") or m.get("max_leverage"), "1")),
+                    max_leverage=_max_leverage(m),
                 )
             )
         self._symbol_cache = out
