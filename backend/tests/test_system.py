@@ -401,7 +401,7 @@ class TestPaperLedger:
         """The exact shape of the bug: sell high, price doubles, buy back."""
         from simin.core.types import OrderType, Side
 
-        ex = PaperExchange(starting_balance=Decimal("1000"))
+        ex = PaperExchange(starting_balance=Decimal("10000"))
         ex.set_mark("ETHUSDT", Decimal("1000"))
         await ex.place_order("ETHUSDT", Side.SELL, OrderType.MARKET, Decimal("5"))
 
@@ -410,7 +410,54 @@ class TestPaperLedger:
             "ETHUSDT", Side.BUY, OrderType.MARKET, Decimal("5"), reduce_only=True
         )
         assert closed.status.value == "filled"
-        # The ledger is allowed to show the damage. Refusing to record a loss
-        # does not prevent the loss.
-        balances = await ex.balances()
-        assert balances["USDT"].free < 0
+        assert ex.position_book() == {}
+        # Short 5 at 1000, bought back at 2000: a 5000 loss, plus fees.
+        free = (await ex.balances())["USDT"].free
+        assert Decimal("4900") < free < Decimal("5010")
+
+    async def test_margin_is_released_on_close(self) -> None:
+        """Treating a close as a spot sale leaves the posted margin locked
+        forever, and the ledger slowly starves the bot of buying power."""
+        from simin.core.types import OrderType, Side
+
+        ex = PaperExchange(starting_balance=Decimal("10000"))
+        ex.set_mark("BTCUSDT", Decimal("100"))
+        await ex.set_leverage("BTCUSDT", Decimal("2"))
+        await ex.place_order("BTCUSDT", Side.BUY, OrderType.MARKET, Decimal("10"))
+        assert ex.position_book()["BTCUSDT"][2] == pytest.approx(
+            Decimal("500"), abs=Decimal("2")
+        )
+
+        ex.set_mark("BTCUSDT", Decimal("110"))
+        await ex.place_order(
+            "BTCUSDT", Side.SELL, OrderType.MARKET, Decimal("10"), reduce_only=True
+        )
+        assert ex.position_book() == {}
+        free = (await ex.balances())["USDT"].free
+        assert Decimal("10080") < free < Decimal("10110")  # +100 profit, less fees
+
+    async def test_partial_close_scales_the_margin(self) -> None:
+        from simin.core.types import OrderType, Side
+
+        ex = PaperExchange(starting_balance=Decimal("10000"))
+        ex.set_mark("BTCUSDT", Decimal("100"))
+        await ex.place_order("BTCUSDT", Side.BUY, OrderType.MARKET, Decimal("10"))
+        opened_margin = ex.position_book()["BTCUSDT"][2]
+
+        await ex.place_order(
+            "BTCUSDT", Side.SELL, OrderType.MARKET, Decimal("4"), reduce_only=True
+        )
+        qty, _, margin = ex.position_book()["BTCUSDT"]
+        assert qty == Decimal("6")
+        assert margin == pytest.approx(opened_margin * Decimal("0.6"), rel=1e-6)
+
+    async def test_flipping_through_flat_opens_the_other_side(self) -> None:
+        from simin.core.types import OrderType, Side
+
+        ex = PaperExchange(starting_balance=Decimal("10000"))
+        ex.set_mark("BTCUSDT", Decimal("100"))
+        await ex.place_order("BTCUSDT", Side.BUY, OrderType.MARKET, Decimal("5"))
+        await ex.place_order("BTCUSDT", Side.SELL, OrderType.MARKET, Decimal("8"))
+        qty, _, margin = ex.position_book()["BTCUSDT"]
+        assert qty == Decimal("-3")
+        assert margin > 0

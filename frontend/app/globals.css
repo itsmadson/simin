@@ -12,6 +12,17 @@
   everywhere at once so it cannot be missed or dismissed as a single red label.
 */
 
+/*
+  Morabba is a Persian *display* face. Its Latin coverage is not a text face —
+  left to cover Latin it swallows the word spacing, and "Cannot reach the API"
+  renders as "CannotreachtheAPI".
+
+  `unicode-range` fixes that at the source rather than by patching every place
+  Latin appears: the browser only pulls Morabba for codepoints in the Arabic
+  and Persian blocks, and everything Latin falls through to the UI sans in the
+  stack. Persian text gets Morabba; Latin and digits get a face designed for
+  them; no component has to think about which it is rendering.
+*/
 @font-face {
   font-family: 'Morabba VF';
   src: url('/fonts/MorabbaVF.woff2') format('woff2-variations'),
@@ -19,6 +30,8 @@
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
+  unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF,
+                 U+FE70-FEFF, U+200C-200F, U+2010-2011, U+060C, U+061B, U+061F;
 }
 
 /* Static cuts, for browsers that decline the variable axis. */
@@ -26,36 +39,50 @@
   font-family: 'Morabba';
   src: url('/fonts/Morabba-Light.woff2') format('woff2');
   font-weight: 300; font-style: normal; font-display: swap;
+  unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF,
+                 U+FE70-FEFF, U+200C-200F, U+2010-2011, U+060C, U+061B, U+061F;
 }
 @font-face {
   font-family: 'Morabba';
   src: url('/fonts/Morabba-Regular.woff2') format('woff2');
   font-weight: 400; font-style: normal; font-display: swap;
+  unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF,
+                 U+FE70-FEFF, U+200C-200F, U+2010-2011, U+060C, U+061B, U+061F;
 }
 @font-face {
   font-family: 'Morabba';
   src: url('/fonts/Morabba-Medium.woff2') format('woff2');
   font-weight: 500; font-style: normal; font-display: swap;
+  unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF,
+                 U+FE70-FEFF, U+200C-200F, U+2010-2011, U+060C, U+061B, U+061F;
 }
 @font-face {
   font-family: 'Morabba';
   src: url('/fonts/Morabba-SemiBold.woff2') format('woff2');
   font-weight: 600; font-style: normal; font-display: swap;
+  unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF,
+                 U+FE70-FEFF, U+200C-200F, U+2010-2011, U+060C, U+061B, U+061F;
 }
 @font-face {
   font-family: 'Morabba';
   src: url('/fonts/Morabba-Bold.woff2') format('woff2');
   font-weight: 700; font-style: normal; font-display: swap;
+  unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF,
+                 U+FE70-FEFF, U+200C-200F, U+2010-2011, U+060C, U+061B, U+061F;
 }
 @font-face {
   font-family: 'Morabba';
   src: url('/fonts/Morabba-ExtraBold.woff2') format('woff2');
   font-weight: 800; font-style: normal; font-display: swap;
+  unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF,
+                 U+FE70-FEFF, U+200C-200F, U+2010-2011, U+060C, U+061B, U+061F;
 }
 @font-face {
   font-family: 'Morabba';
   src: url('/fonts/Morabba-Black.woff2') format('woff2');
   font-weight: 900; font-style: normal; font-display: swap;
+  unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF,
+                 U+FE70-FEFF, U+200C-200F, U+2010-2011, U+060C, U+061B, U+061F;
 }
 
 :root {
@@ -138,8 +165,27 @@ body {
 
 ::selection { background: hsl(var(--cool) / 0.3); color: #fff; }
 
-/* Numerals must never reflow as they tick. */
-.tab { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+/*
+  Numerals must never reflow as they tick, and must never be reordered by the
+  bidi algorithm. Inside an RTL paragraph, "+30%" is a neutral-sign / digits /
+  neutral-sign run that the algorithm is entitled to lay out as "%30+" — so a
+  gain reads as a loss and "-5.5%" reads as "5.5%-". Isolating each numeric run
+  as LTR is the fix; setting it per-element rather than per-value means no
+  formatting helper has to remember to inject a bidi mark.
+*/
+.tab,
+.value,
+.num {
+  font-variant-numeric: tabular-nums;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.tab, .num { font-family: var(--font-mono); }
+
+/* In RTL the isolated numerals still belong on the reading edge. */
+:root[dir='rtl'] .value,
+:root[dir='rtl'] .tab { text-align: right; }
+:root[dir='rtl'] .num { text-align: left; }
 
 h1, h2, h3, .display {
   font-family: var(--font-display);

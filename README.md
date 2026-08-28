@@ -30,20 +30,27 @@ hatches the space between them. That space is the product.
 not `0`, and the interface renders "not measured yet". A zero shown where a
 measurement belongs is the exact failure this design exists to prevent.
 
-On the synthetic data shipped for the offline demo, the calibration currently
-reports something like this — your own numbers on real history will differ, and
-you should run it yourself:
+Here is what that looks like. Run it yourself:
 
-| Level | Target/month | Measured/month | Median DD | Risk of ruin |
-|------:|-------------:|---------------:|----------:|-------------:|
-| 2 | +4% | +0.67% | 2.1% | 0.1% |
-| 4 | +12% | +1.99% | 8.5% | 5.7% |
-| 5 | +20% | −0.29% | 26.1% | 75.0% |
-| 7 | +50% | +5.47% | 30.9% | 54.2% |
-| 10 | +200% | −9.19% | 80.4% | 97.0% |
+```bash
+simin calibrate --level 4 --venue offline --symbols BTCUSDT ETHUSDT --bars 6000
+```
+
+```
+calibrating level 4...
+  target 12%/mo  measured +0.40%/mo  maxDD 7.7%  ruin 5%  gates FAILED
+    failed: survives_double_costs — return at 2x costs: -2.25%
+    failed: walk_forward_consistency — 40% of walk-forward windows profitable
+    failed: sharpe_positive — Sharpe -0.02 (need > 0.3)
+```
+
+Target 12%, measured 0.40%, and three named reasons the configuration should not
+be trusted. On the generated demo data the aggressive levels come out worse
+still — level 10 measures negative with a ruin probability in the nineties.
 
 That is the system working correctly. A bot that reported +200% here would be
-lying to you.
+lying to you. Numbers on real exchange history will differ; the machinery that
+produces them will not.
 
 ---
 

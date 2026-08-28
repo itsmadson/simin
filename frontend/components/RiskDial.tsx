@@ -23,15 +23,30 @@ import { useCallback, useEffect, useRef } from 'react';
 import type { DialLevel } from '@/lib/api';
 import { type Lang, digits, pct, t } from '@/lib/i18n';
 
-const START = 150; // degrees; 0 is East, sweeping clockwise
+// Angles measured from straight up, increasing clockwise: 0 = top, 90 = right,
+// 180 = bottom, 270 = left. A 240 degree sweep starting at 240 puts level 1 at
+// the lower left and level 10 at the lower right, with the gap at the bottom —
+// the orientation every physical gauge uses, so it reads without instruction.
+const START = 240;
 const SWEEP = 240;
 const R = 132;
 const CX = 170;
 const CY = 168;
 
+/**
+ * Point on the dial's circle.
+ *
+ * Rounded, and that is not cosmetic: Node and the browser disagree on the last
+ * bit of `Math.cos`, so unrounded coordinates differ between the server-rendered
+ * SVG and the client's, and React reports a hydration mismatch on every tick
+ * mark. Three decimals is far below a pixel at this radius.
+ */
 function polar(cx: number, cy: number, r: number, deg: number) {
   const rad = ((deg - 90) * Math.PI) / 180;
-  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+  return {
+    x: Math.round((cx + r * Math.cos(rad)) * 1000) / 1000,
+    y: Math.round((cy + r * Math.sin(rad)) * 1000) / 1000,
+  };
 }
 
 function arcPath(cx: number, cy: number, r: number, from: number, to: number) {
@@ -80,8 +95,10 @@ export function RiskDial({ level, onChange, data, lang, disabled }: RiskDialProp
     const y = ((clientY - rect.top) / rect.height) * 340 - CY;
     let deg = (Math.atan2(y, x) * 180) / Math.PI + 90;
     if (deg < 0) deg += 360;
+    // Unwrap onto the arc: the sweep crosses 360, so an angle just past the top
+    // is "further along" than one just before it, not 360 degrees behind.
     let offset = deg - START;
-    if (offset < -60) offset += 360;
+    if (offset < -SWEEP / 2) offset += 360;
     const fraction = Math.max(0, Math.min(offset / SWEEP, 1));
     return Math.round(fraction * 9) + 1;
   }, []);

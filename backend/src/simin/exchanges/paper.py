@@ -66,6 +66,12 @@ class PaperExchange(Exchange):
         self._leverage: dict[str, Decimal] = {}
         #: Last seen price per symbol, used when no data source is attached.
         self._marks: dict[str, Decimal] = {}
+        #: Simulated margin book: symbol -> (signed qty, average entry, margin
+        #: posted). Without it the ledger cannot tell an opening order from a
+        #: closing one, and treats a short's proceeds as spendable cash while
+        #: never releasing the margin behind a closed position — so the balance
+        #: drifts away from reality and starts refusing valid entries.
+        self._book: dict[str, tuple[Decimal, Decimal, Decimal]] = {}
 
     # --- Market data: delegated to the real source ------------------------
 
@@ -131,6 +137,53 @@ class PaperExchange(Exchange):
             )
         self._balances[asset] = Balance(asset, new_free, current.locked)
 
+    def _apply_to_book(
+        self, symbol: str, side: Side, qty: Decimal, price: Decimal, leverage: Decimal
+    ) -> tuple[Decimal, bool]:
+        """Update the simulated position and return `(cash delta, is closing)`.
+
+        A margin account, not a spot one. Opening posts margin; closing releases
+        the margin that was posted and realises the profit or loss against the
+        average entry. Modelling it as spot — where selling simply credits the
+        proceeds — makes a short look like income and leaves the margin behind a
+        closed position locked forever.
+        """
+        signed = qty * side.sign
+        held, avg, margin = self._book.get(symbol, (ZERO, ZERO, ZERO))
+        lev = leverage if leverage > 0 else Decimal(1)
+
+        # Same direction, or opening from flat: post margin.
+        if held == 0 or (held > 0) == (signed > 0):
+            new_qty = held + signed
+            total = abs(held) * avg + abs(signed) * price
+            new_avg = total / abs(new_qty) if new_qty else ZERO
+            posted = abs(signed) * price / lev
+            self._book[symbol] = (new_qty, new_avg, margin + posted)
+            return -posted, False
+
+        # Opposite direction: reduce, and possibly flip.
+        closed = min(abs(signed), abs(held))
+        direction = Decimal(1) if held > 0 else Decimal(-1)
+        realised = (price - avg) * closed * direction
+        released = margin * (closed / abs(held))
+        remaining = held + signed
+        cash = released + realised
+
+        if remaining == 0:
+            self._book.pop(symbol, None)
+        elif (remaining > 0) == (held > 0):
+            self._book[symbol] = (remaining, avg, margin - released)
+        else:
+            # Flipped through flat: the excess opens a new position the other way.
+            opened = abs(remaining) * price / lev
+            self._book[symbol] = (remaining, price, opened)
+            cash -= opened
+        return cash, True
+
+    def position_book(self) -> dict[str, tuple[Decimal, Decimal, Decimal]]:
+        """(signed qty, average entry, posted margin) per symbol. For tests."""
+        return dict(self._book)
+
     # --- Trading ----------------------------------------------------------
 
     async def set_leverage(self, symbol: str, leverage: Decimal) -> None:
@@ -176,17 +229,8 @@ class PaperExchange(Exchange):
         fee = self._costs.fee(notional, type)
 
         leverage = self._leverage.get(symbol, Decimal(1))
-        margin = notional / leverage
-        cash_delta = -(margin + fee) if side is Side.BUY else (margin - fee)
-        # Spot semantics for a simple simulated account: buying consumes quote,
-        # selling returns it. Futures margin is handled by the position manager
-        # above this layer, which is why leverage only scales the cash held.
-        #
-        # This ledger is for display; the runner's AccountState is the authority
-        # on equity and PnL. Keeping them separate is why a reduce-only order
-        # must not be blocked by this balance — the two views disagreeing is
-        # expected, and this one is not the one that decides anything.
-        self._credit(self.quote_asset, cash_delta, closing=reduce_only)
+        cash_delta, closing = self._apply_to_book(symbol, side, qty, fill_price, leverage)
+        self._credit(self.quote_asset, cash_delta - fee, closing=closing or reduce_only)
 
         order = Order(
             id=oid, symbol=symbol, side=side, type=type, qty=qty, price=price,
