@@ -44,10 +44,12 @@ from simin.core.types import (
 )
 from simin.exchanges.base import (
     Balance,
+    DepthLevel,
     Exchange,
     ExchangeError,
     Fees,
     InsufficientFunds,
+    OrderBook,
     RateLimited,
     RateLimiter,
     Ticker,
@@ -261,17 +263,59 @@ class CoinExExchange(Exchange):
         self._symbol_cache = out
         return out
 
+    #: Hard cap the venue enforces on a single kline request.
+    PAGE = 1000
+
     async def candles(
         self, symbol: str, tf: TF, limit: int = 500, end: datetime | None = None
     ) -> list[Candle]:
+        """Closed candles, oldest first, paginating when more than a page is asked for.
+
+        The venue returns at most 1000 bars per call — 83 days on a 2h chart,
+        which is not enough to walk-forward anything. Asking for more pages
+        backwards through `end_time` until the request is satisfied or the
+        listing runs out. Without this, every symbol silently caps at 999 bars
+        and the screener quietly has nothing to test.
+        """
         period = _PERIOD.get(tf)
         if period is None:
             raise ExchangeError(f"CoinEx does not offer {tf.value} candles")
-        data = await self._request(
-            "GET",
-            f"/v2/{self._market_path}/kline",
-            params={"market": symbol, "period": period, "limit": min(limit + 1, 1000)},
-        )
+
+        collected: dict[datetime, Candle] = {}
+        cursor_ms = int(end.timestamp() * 1000) if end else None
+        # Bound the loop independently of the data: a venue that keeps returning
+        # the same page must not spin forever.
+        for _ in range(max(1, -(-limit // self.PAGE)) + 2):
+            params: dict[str, Any] = {
+                "market": symbol,
+                "period": period,
+                "limit": self.PAGE,
+            }
+            if cursor_ms is not None:
+                params["end_time"] = cursor_ms
+                params["start_time"] = cursor_ms - self.PAGE * tf.seconds * 1000
+            page = await self._parse_klines(
+                await self._request("GET", f"/v2/{self._market_path}/kline", params=params),
+                symbol,
+            )
+            if not page:
+                break
+            fresh = [c for c in page if c.ts not in collected]
+            for c in page:
+                collected[c.ts] = c
+            if len(collected) >= limit + 1 or not fresh:
+                break
+            cursor_ms = int(min(collected).timestamp() * 1000) - 1
+
+        candles = sorted(collected.values(), key=lambda c: c.ts)
+        # Drop the still-forming bar. Never negotiable.
+        now = datetime.now(UTC)
+        while candles and not tf.is_closed(candles[-1].ts, now):
+            candles.pop()
+        return candles[-limit:]
+
+    @staticmethod
+    async def _parse_klines(data: Any, symbol: str) -> list[Candle]:
         candles: list[Candle] = []
         for k in data or []:
             try:
@@ -289,11 +333,7 @@ class CoinExExchange(Exchange):
                 raise ExchangeError(f"malformed CoinEx kline for {symbol}: {exc}") from exc
 
         candles.sort(key=lambda c: c.ts)
-        # Drop the still-forming bar. Never negotiable.
-        now = datetime.now(UTC)
-        while candles and not tf.is_closed(candles[-1].ts, now):
-            candles.pop()
-        return candles[-limit:]
+        return candles
 
     async def ticker(self, symbol: str) -> Ticker:
         data = await self._request(
@@ -309,6 +349,34 @@ class CoinExExchange(Exchange):
         if bid <= 0 or ask <= 0:
             bid = ask = last
         return Ticker(symbol, bid, ask, last, datetime.now(UTC))
+
+    async def order_book(self, symbol: str, limit: int = 50) -> OrderBook | None:
+        data = await self._request(
+            "GET",
+            f"/v2/{self._market_path}/depth",
+            # interval=0 asks for un-aggregated levels. Aggregated depth hides
+            # the gaps that make a book expensive to cross.
+            params={"market": symbol, "limit": min(limit, 50), "interval": "0"},
+        )
+        book = (data or {}).get("depth") or data or {}
+        bids = book.get("bids") or []
+        asks = book.get("asks") or []
+        if not bids or not asks:
+            return None
+        return OrderBook(
+            symbol=symbol,
+            bids=tuple(DepthLevel(_dec(p), _dec(q)) for p, q in bids),
+            asks=tuple(DepthLevel(_dec(p), _dec(q)) for p, q in asks),
+            ts=datetime.now(UTC),
+        )
+
+    async def tickers(self) -> list[dict[str, Any]]:
+        """Every market's 24h stats in one call.
+
+        Scanning 200 markets one ticker at a time is 200 round trips and a rate
+        limit; the venue offers them in a single response, so use it.
+        """
+        return list(await self._request("GET", f"/v2/{self._market_path}/ticker") or [])
 
     async def fees(self, symbol: str) -> Fees:
         from simin.exchanges.costs import cost_model

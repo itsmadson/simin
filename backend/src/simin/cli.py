@@ -21,6 +21,12 @@ from simin.exchanges.registry import build_exchange, venue_info
 from simin.indicators.features import FeatureFrame
 from simin.lab.backtest import Backtester
 from simin.lab.calibrate import CalibrationStore, calibrate_level, fingerprint
+from simin.lab.portfolio import analyse as analyse_portfolio
+from simin.lab.portfolio import format_report as format_portfolio
+from simin.lab.screen import format_report as format_screen
+from simin.lab.screen import screen
+from simin.lab.universe import format_report as format_universe
+from simin.lab.universe import scan
 from simin.logging import configure
 from simin.risk.dial import all_profiles, profile
 from simin.strategies.base import build_many
@@ -199,6 +205,116 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _scan(venue: str, equity: float, position: float, tf: TF, max_markets: int):
+    import os
+
+    os.environ["SIMIN_MODE"] = "lab"
+    os.environ["SIMIN_VENUE"] = venue
+    reset_settings_cache()
+    exchange = build_exchange(settings())
+    try:
+        return await scan(
+            exchange, cost_model(venue), Decimal(str(equity)), Decimal(str(position)),
+            tf=tf, max_markets=max_markets, check_history=False,
+        )
+    finally:
+        await exchange.close()
+
+
+def cmd_universe(args: argparse.Namespace) -> int:
+    """Which markets can this account actually trade?"""
+    tf = TF.parse(args.timeframe) if args.timeframe else TF.H2
+    report = asyncio.run(
+        _scan(args.venue, args.equity, args.position, tf, args.max_markets)
+    )
+    print(format_universe(report, limit=args.limit))
+    return 0
+
+
+async def _load_universe(
+    venue: str, symbols: list[str], tf: TF, bars: int
+) -> tuple[dict[str, FeatureFrame], dict[str, Symbol]]:
+    import os
+
+    os.environ["SIMIN_MODE"] = "lab"
+    os.environ["SIMIN_VENUE"] = venue
+    reset_settings_cache()
+    exchange = build_exchange(settings())
+    frames: dict[str, FeatureFrame] = {}
+    syms: dict[str, Symbol] = {}
+    try:
+        listed = {s.name: s for s in await exchange.symbols()}
+        for name in symbols:
+            sym = listed.get(name)
+            if sym is None:
+                print(f"    {name}: not listed on {venue}")
+                continue
+            rows = await exchange.candles(sym.venue_symbol, tf, limit=bars)
+            if len(rows) < 1200:
+                print(f"    {name}: only {len(rows)} bars — skipped")
+                continue
+            frames[name] = FeatureFrame(name, tf, rows)
+            syms[name] = sym
+            print(f"    {name}: {len(rows)} bars")
+    finally:
+        await exchange.close()
+    return frames, syms
+
+
+def cmd_screen(args: argparse.Namespace) -> int:
+    """Walk-forward every candidate market, then correct for having tested them all."""
+    prof = profile(args.level)
+    tf = TF.parse(args.timeframe) if args.timeframe else prof.signal_tf
+
+    names = list(args.symbols)
+    if not names:
+        print(f"  scanning {args.venue} for tradeable markets...")
+        report = asyncio.run(
+            _scan(args.venue, args.equity, args.position, tf, args.max_markets)
+        )
+        names = report.top(args.top)
+        print(f"  {len(names)} tradeable at ${args.position:,.0f} per position\n")
+
+    print("  loading history...")
+    frames, syms = asyncio.run(_load_universe(args.venue, names, tf, args.bars))
+    if len(frames) < 2:
+        raise SystemExit("need at least 2 markets with enough history to screen")
+
+    result = screen(
+        prof, frames, syms, tf, cost_model(args.venue), Decimal(str(args.equity)),
+        train_bars=args.train, test_bars=args.test, null_runs=args.null_runs,
+        extra_trials=args.extra_trials,
+    )
+    print(format_screen(result, limit=args.limit))
+
+    if args.json:
+        Path(args.json).write_text(json.dumps(result.to_dict(), indent=2))
+        print(f"  written to {args.json}\n")
+    return 0 if result.survivors else 1
+
+
+def cmd_portfolio(args: argparse.Namespace) -> int:
+    """How many independent bets is this basket really making?"""
+    tf = TF.parse(args.timeframe) if args.timeframe else TF.H2
+    names = list(args.symbols)
+    if not names:
+        print(f"  scanning {args.venue}...")
+        report = asyncio.run(
+            _scan(args.venue, args.equity, args.position, tf, args.max_markets)
+        )
+        names = report.top(args.top)
+    print("  loading history...")
+    frames, _ = asyncio.run(_load_universe(args.venue, names, tf, args.bars))
+    if len(frames) < 2:
+        raise SystemExit("need at least 2 markets to measure correlation")
+    result = analyse_portfolio(
+        frames, ranked=names, threshold=args.threshold,
+        max_positions=args.max_positions or None,
+    )
+    print(format_portfolio(result))
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -248,6 +364,47 @@ def build_parser() -> argparse.ArgumentParser:
                      help="0 calibrates every level")
     add_data_args(cal)
     cal.set_defaults(func=cmd_calibrate)
+
+    def add_scan_args(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument("--venue", default="coinex")
+        sp.add_argument("--equity", type=float, default=10000.0)
+        sp.add_argument("--position", type=float, default=3000.0,
+                        help="notional of ONE position — this is what the book must absorb")
+        sp.add_argument("--max-markets", type=int, default=45,
+                        help="how many of the most liquid markets to measure depth on")
+        sp.add_argument("--timeframe", default="")
+
+    uni = sub.add_parser("universe", help="which markets this account can actually trade")
+    add_scan_args(uni)
+    uni.add_argument("--limit", type=int, default=30)
+    uni.set_defaults(func=cmd_universe)
+
+    sc = sub.add_parser("screen",
+                        help="walk-forward many markets, corrected for multiple testing")
+    sc.add_argument("--level", type=int, default=4, choices=range(1, 11))
+    sc.add_argument("--symbols", nargs="*", default=[],
+                    help="omit to auto-select from the universe scan")
+    add_scan_args(sc)
+    sc.add_argument("--top", type=int, default=20)
+    sc.add_argument("--bars", type=int, default=5000)
+    sc.add_argument("--train", type=int, default=1500)
+    sc.add_argument("--test", type=int, default=450)
+    sc.add_argument("--null-runs", type=int, default=15,
+                    help="bootstrap runs on structureless data")
+    sc.add_argument("--extra-trials", type=int, default=1,
+                    help="multiplier if you are also searching over risk levels")
+    sc.add_argument("--limit", type=int, default=30)
+    sc.add_argument("--json", default="")
+    sc.set_defaults(func=cmd_screen)
+
+    pf = sub.add_parser("portfolio", help="correlation structure and effective breadth")
+    pf.add_argument("--symbols", nargs="*", default=[])
+    add_scan_args(pf)
+    pf.add_argument("--top", type=int, default=20)
+    pf.add_argument("--bars", type=int, default=2000)
+    pf.add_argument("--threshold", type=float, default=0.75)
+    pf.add_argument("--max-positions", type=int, default=0)
+    pf.set_defaults(func=cmd_portfolio)
 
     sv = sub.add_parser("serve", help="run the API")
     sv.add_argument("--host", default="")

@@ -86,6 +86,71 @@ class Ticker:
 
 
 @dataclass(frozen=True, slots=True)
+class DepthLevel:
+    price: Decimal
+    qty: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class OrderBook:
+    """Top of book, deep enough to price a real order.
+
+    Turnover is a poor proxy for whether a market can be traded: a pair can show
+    healthy 24h volume and still have a book two hundred dollars deep, because
+    the volume was one whale and a hundred bots. Walking the actual book is the
+    only way to know what a position would cost to open.
+    """
+
+    symbol: str
+    bids: tuple[DepthLevel, ...]
+    asks: tuple[DepthLevel, ...]
+    ts: datetime
+
+    @property
+    def best_bid(self) -> Decimal:
+        return self.bids[0].price if self.bids else Decimal(0)
+
+    @property
+    def best_ask(self) -> Decimal:
+        return self.asks[0].price if self.asks else Decimal(0)
+
+    @property
+    def mid(self) -> Decimal:
+        if not self.bids or not self.asks:
+            return Decimal(0)
+        return (self.best_bid + self.best_ask) / 2
+
+    def sweep(self, notional: Decimal, buy: bool = True) -> Decimal | None:
+        """Fractional slippage from walking the book to fill `notional`.
+
+        Returns None when the visible book cannot fill the order at all — which
+        is the answer that matters most, and the one a spread-based estimate can
+        never give you.
+        """
+        levels = self.asks if buy else self.bids
+        if not levels or notional <= 0:
+            return None
+        best = levels[0].price
+        if best <= 0:
+            return None
+        spent = Decimal(0)
+        filled = Decimal(0)
+        for level in levels:
+            room = (notional - spent) / level.price
+            take = min(level.qty, room)
+            if take <= 0:
+                break
+            spent += take * level.price
+            filled += take
+            if spent >= notional * Decimal("0.999"):
+                break
+        if filled <= 0 or spent < notional * Decimal("0.9"):
+            return None
+        avg = spent / filled
+        return abs(avg / best - 1)
+
+
+@dataclass(frozen=True, slots=True)
 class Fees:
     """Venue fee schedule. Round-trip cost is what actually matters, and on
     every venue in scope it dwarfs the difference between good and mediocre
@@ -179,6 +244,14 @@ class Exchange(abc.ABC):
 
     @abc.abstractmethod
     async def fees(self, symbol: str) -> Fees: ...
+
+    async def order_book(self, symbol: str, limit: int = 50) -> OrderBook | None:
+        """Depth, for measuring what a position would actually cost.
+
+        Optional: adapters that cannot provide it return None, and callers must
+        treat that as "unknown", never as "free".
+        """
+        return None
 
     # --- Account ----------------------------------------------------------
 

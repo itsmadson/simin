@@ -35,6 +35,9 @@ from simin.execution.runner import BotState, Runner
 from simin.indicators.features import FeatureFrame
 from simin.lab.backtest import Backtester
 from simin.lab.calibrate import CalibrationStore, calibrate_level, fingerprint
+from simin.lab.portfolio import analyse as analyse_portfolio
+from simin.lab.screen import screen
+from simin.lab.universe import scan as scan_universe
 from simin.lab.validation import evaluate_gates, monte_carlo, walk_forward
 from simin.logging import configure, get_logger
 from simin.risk.dial import all_profiles, ladder, profile
@@ -119,6 +122,44 @@ class RiskLevelRequest(BaseModel):
 
 class StopRequest(BaseModel):
     flatten: bool = False
+
+
+class UniverseRequest(BaseModel):
+    venue: str = "coinex"
+    equity: float = 10000.0
+    #: Notional of ONE position. This is what the order book has to absorb, and
+    #: it is what makes the answer account-specific rather than a general claim
+    #: about which coins are "liquid".
+    position_notional: float = 3000.0
+    timeframe: str = "2h"
+    max_markets: int = Field(default=40, ge=5, le=120)
+
+
+class ScreenRequest(BaseModel):
+    risk_level: int = Field(default=4, ge=1, le=10)
+    venue: str = "coinex"
+    symbols: list[str] = Field(default_factory=list)
+    timeframe: str = ""
+    equity: float = 10000.0
+    position_notional: float = 3000.0
+    top: int = Field(default=15, ge=2, le=40)
+    bars: int = Field(default=5000, ge=1500, le=20000)
+    train_bars: int = 1400
+    test_bars: int = 420
+    null_runs: int = Field(default=10, ge=0, le=60)
+    #: Multiplier for searching beyond this one call. Screening ten risk levels
+    #: and reporting the best is ten times the trials, and the bar must rise
+    #: accordingly or the correction is defeated.
+    extra_trials: int = Field(default=1, ge=1, le=50)
+
+
+class PortfolioRequest(BaseModel):
+    venue: str = "coinex"
+    symbols: list[str] = Field(default_factory=list)
+    timeframe: str = "2h"
+    bars: int = Field(default=2000, ge=500, le=10000)
+    threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    max_positions: int = 0
 
 
 class BacktestRequest(BaseModel):
@@ -611,6 +652,132 @@ async def lab_calibrate(req: BacktestRequest) -> dict[str, Any]:
         return report.to_dict()
 
     return await asyncio.to_thread(_run)
+
+
+# --- Research ------------------------------------------------------------
+
+
+async def _research_exchange(venue: str):
+    import os
+
+    os.environ["SIMIN_MODE"] = "lab"
+    os.environ["SIMIN_VENUE"] = venue
+    reset_settings_cache()
+    return build_exchange(get_settings())
+
+
+async def _load_universe_frames(
+    exchange: Any, names: list[str], tf: TF, bars: int, min_bars: int = 1200
+) -> tuple[dict[str, FeatureFrame], dict[str, Symbol]]:
+    listed = {s.name: s for s in await exchange.symbols()}
+    frames: dict[str, FeatureFrame] = {}
+    syms: dict[str, Symbol] = {}
+    for name in names:
+        sym = listed.get(name)
+        if sym is None:
+            continue
+        try:
+            rows = await exchange.candles(sym.venue_symbol, tf, limit=bars)
+        except ExchangeError:
+            continue
+        if len(rows) < min_bars:
+            continue
+        frames[name] = FeatureFrame(name, tf, rows)
+        syms[name] = sym
+    return frames, syms
+
+
+@app.post("/api/lab/universe")
+async def lab_universe(req: UniverseRequest) -> dict[str, Any]:
+    """Which markets this account can actually trade, and why the rest cannot."""
+    exchange = await _research_exchange(req.venue)
+    try:
+        report = await scan_universe(
+            exchange, cost_model(req.venue), Decimal(str(req.equity)),
+            Decimal(str(req.position_notional)), TF.parse(req.timeframe),
+            max_markets=req.max_markets, check_history=False,
+        )
+    except ExchangeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    finally:
+        await exchange.close()
+    return report.to_dict()
+
+
+@app.post("/api/lab/screen")
+async def lab_screen(req: ScreenRequest) -> dict[str, Any]:
+    """Walk-forward many markets, corrected for having tested them all.
+
+    The `survived` flag is the only field worth acting on. Ranking by raw return
+    and taking the top row is precisely the mistake this endpoint exists to
+    prevent, which is why the verdict string is returned alongside the rows.
+    """
+    prof = profile(req.risk_level)
+    tf = TF.parse(req.timeframe) if req.timeframe else prof.signal_tf
+    costs = cost_model(req.venue)
+    exchange = await _research_exchange(req.venue)
+
+    try:
+        names = req.symbols
+        if not names:
+            scanned = await scan_universe(
+                exchange, costs, Decimal(str(req.equity)),
+                Decimal(str(req.position_notional)), tf, check_history=False,
+            )
+            names = scanned.top(req.top)
+        frames, syms = await _load_universe_frames(exchange, names, tf, req.bars)
+    except ExchangeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    finally:
+        await exchange.close()
+
+    if len(frames) < 2:
+        raise HTTPException(
+            400,
+            "need at least 2 markets with enough history to screen; "
+            f"only {len(frames)} of {len(names)} had it",
+        )
+
+    def _run() -> dict[str, Any]:
+        return screen(
+            prof, frames, syms, tf, costs, Decimal(str(req.equity)),
+            train_bars=req.train_bars, test_bars=req.test_bars,
+            null_runs=req.null_runs, extra_trials=req.extra_trials,
+        ).to_dict()
+
+    # Screening is minutes of CPU. Off the event loop, or the whole API stalls.
+    return await asyncio.to_thread(_run)
+
+
+@app.post("/api/lab/portfolio")
+async def lab_portfolio(req: PortfolioRequest) -> dict[str, Any]:
+    """How many independent bets a basket is really making."""
+    tf = TF.parse(req.timeframe)
+    exchange = await _research_exchange(req.venue)
+    try:
+        names = req.symbols
+        if not names:
+            scanned = await scan_universe(
+                exchange, cost_model(req.venue), Decimal("10000"),
+                Decimal("3000"), tf, check_history=False,
+            )
+            names = scanned.top(20)
+        frames, _ = await _load_universe_frames(
+            exchange, names, tf, req.bars, min_bars=400
+        )
+    except ExchangeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    finally:
+        await exchange.close()
+
+    if len(frames) < 2:
+        raise HTTPException(400, "need at least 2 markets to measure correlation")
+
+    return analyse_portfolio(
+        frames, ranked=names, threshold=req.threshold,
+        max_positions=req.max_positions or None,
+    ).to_dict()
+
 
 
 # --- Live stream ----------------------------------------------------------
