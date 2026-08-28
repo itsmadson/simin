@@ -103,6 +103,23 @@ class PaperExchange(Exchange):
         spread = mark * self._costs.half_spread
         return Ticker(symbol, mark - spread, mark + spread, mark, datetime.now(UTC))
 
+    async def order_book(self, symbol: str, limit: int = 50):
+        """Depth comes from the real venue. A simulated account over real prices
+        must measure real depth, or the universe scanner silently concludes that
+        every market is untradeable — which is what happened the first time this
+        ran behind a paper wrapper."""
+        if self._source is None:
+            return None
+        return await self._source.order_book(symbol, limit)
+
+    async def tickers(self) -> list[dict[str, object]]:
+        """Bulk 24h stats, delegated. Market data is market data; only the
+        *account* is simulated here."""
+        fetch = getattr(self._source, "tickers", None)
+        if fetch is None:
+            return []
+        return list(await fetch())
+
     async def fees(self, symbol: str) -> Fees:
         return Fees(self._costs.maker_fee, self._costs.taker_fee, self._costs.funding_rate)
 

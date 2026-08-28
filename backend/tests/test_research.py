@@ -304,3 +304,50 @@ class TestPortfolio:
         }
         text = analyse(frames).summary()
         assert "independent bets" in text
+
+
+class TestPaperDelegatesMarketData:
+    """A simulated account over real prices must still see real depth.
+
+    Regression: the universe scanner behind a paper wrapper reported all 223
+    markets as `no_data`, because PaperExchange delegated `candles` and `ticker`
+    to its source but not `tickers` or `order_book`. Only the account is
+    simulated; market data is market data.
+    """
+
+    class Source:
+        name = "src"
+
+        async def tickers(self):
+            return [{"market": "BTCUSDT", "last": "100", "high": "104",
+                     "low": "96", "value": "50000000"}]
+
+        async def order_book(self, symbol, limit=50):
+            from datetime import UTC, datetime
+            return OrderBook(
+                symbol=symbol,
+                bids=(DepthLevel(Decimal("99"), Decimal("1000")),),
+                asks=(DepthLevel(Decimal("100"), Decimal("1000")),),
+                ts=datetime.now(UTC),
+            )
+
+    async def test_tickers_are_delegated(self) -> None:
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(data_source=self.Source())  # type: ignore[arg-type]
+        assert len(await ex.tickers()) == 1
+
+    async def test_order_book_is_delegated(self) -> None:
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(data_source=self.Source())  # type: ignore[arg-type]
+        book = await ex.order_book("BTCUSDT")
+        assert book is not None
+        assert float(book.sweep(Decimal("5000"))) == pytest.approx(0.0, abs=1e-9)
+
+    async def test_a_bare_paper_account_has_neither(self) -> None:
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange()
+        assert await ex.tickers() == []
+        assert await ex.order_book("BTCUSDT") is None
