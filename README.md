@@ -198,6 +198,40 @@ If you screen several risk levels and report the best, pass `--extra-trials` so
 the bar rises accordingly. Searching more and correcting for less is how the
 correction gets defeated.
 
+### What a wider, honestly-corrected search found
+
+Four (timeframe, risk level) combinations over ~18 markets is ~70 trials, not
+18 — so the search was run with `--extra-trials 4` and the bar raised to match.
+Searching more while correcting for less is how the correction gets defeated.
+
+| Timeframe | Level | Positive out-of-sample | Best DSR | Survivors |
+|---|---|---|---|---|
+| 4h | 4 | 7 / 17 | 0.17 | **0** |
+| 2h | 7 | 1 / 17 | 0.02 | **0** |
+| 1h | 5 | 0 / 18 | 0.01 | **0** |
+| 15m | 7 | 0 / 18 | 0.00 | **0** |
+
+Nothing survived anywhere. But look at the second column, because it is the most
+useful number in this document: **the degradation is perfectly monotonic with
+timeframe.** 4h is roughly a coin flip. 15m is uniformly negative across every
+market tested.
+
+That is fee drag, and it has a direct and uncomfortable implication for the risk
+dial: **levels 7 through 10 trade the fastest candles, and on this venue the
+fastest candles are measurably the worst.** The aggressive end of the dial is not
+merely more volatile in pursuit of a higher return — on this evidence it has a
+*lower* expected return than the slow end, and pays for the privilege in
+liquidation risk.
+
+Funding offers no consolation either: CoinEx funding rates across the liquid
+markets were 0.0000% at the time of writing, so there is no carry to harvest to
+offset the friction.
+
+None of this says trading is impossible. It says these six generic
+indicator strategies, on this venue, over this year, do not have an edge that
+survives being looked for — and that the honest thing to do with that finding is
+print it rather than keep searching until something looks good.
+
 ## What it trades on
 
 Six strategies, each built for a specific market condition and muted when the
