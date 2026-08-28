@@ -48,6 +48,11 @@ export default function DialPage() {
       setVenues(v.venues);
       setBot(b);
       if (b.risk_level) setLevel(b.risk_level);
+      // Mirror the running bot rather than leaving the form on its defaults.
+      // A selector showing "Offline demo" while the bot trades CoinEx is not a
+      // cosmetic mismatch — it misreports where the money would go.
+      if (b.venue_key) setVenue(b.venue_key);
+      if (b.mode === 'lab' || b.mode === 'real') setMode(b.mode);
       setErr('');
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : String(e));

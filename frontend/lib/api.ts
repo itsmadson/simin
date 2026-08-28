@@ -151,7 +151,10 @@ export interface BotStatus {
   state: string;
   running?: boolean;
   mode?: string;
+  /** Human-readable, e.g. "coinex (paper)". */
   venue?: string;
+  /** Configured venue key, e.g. "coinex". Match selectors against this. */
+  venue_key?: string;
   risk_level?: number;
   profile_name?: string;
   started_at?: string | null;

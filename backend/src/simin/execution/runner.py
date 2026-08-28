@@ -102,7 +102,12 @@ class Event:
 class RunnerStatus:
     state: BotState
     mode: Mode
+    #: Human-readable, e.g. "coinex (paper)". For display only.
     venue: str
+    #: The configured venue key, e.g. "coinex". Stable, and what the UI matches
+    #: its selector against — a label that changes with the adapter cannot also
+    #: serve as an identifier.
+    venue_key: str
     risk_level: int
     profile_name: str
     started_at: datetime | None
@@ -126,6 +131,7 @@ class RunnerStatus:
             "state": self.state.value,
             "mode": self.mode.value,
             "venue": self.venue,
+            "venue_key": self.venue_key,
             "risk_level": self.risk_level,
             "profile_name": self.profile_name,
             "started_at": self.started_at.isoformat() if self.started_at else None,
@@ -696,6 +702,7 @@ class Runner:
             # A paper adapter reports where its prices actually come from, so
             # "CoinEx (paper)" and "offline (paper)" never look the same.
             venue=getattr(self.exchange, "source_name", self.exchange.name),
+            venue_key=self.settings.venue,
             risk_level=self.profile.level,
             profile_name=self.profile.name_en,
             started_at=self.started_at,
