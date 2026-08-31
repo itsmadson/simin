@@ -160,10 +160,13 @@ class PaperExchange(Exchange):
         """
         current = self._balances.get(asset, Balance(asset, ZERO, ZERO))
         new_free = current.free + amount
-        if new_free < 0 and not closing:
+        # Judge an opening order against capital not already backing a position,
+        # never against the raw balance. Margin lives in the book, so a balance
+        # that still looks healthy can already be fully committed.
+        if not closing and new_free - self.posted_margin() < 0:
             raise InsufficientFunds(
-                f"paper account cannot open this position: {current.free} in {asset} "
-                f"is not enough for {-amount}"
+                f"paper account cannot open this position: {self.free_capital():.2f} "
+                f"{asset} free of margin, needs {-amount:.2f}"
             )
         self._balances[asset] = Balance(asset, new_free, current.locked)
 
@@ -172,24 +175,34 @@ class PaperExchange(Exchange):
     ) -> tuple[Decimal, bool]:
         """Update the simulated position and return `(cash delta, is closing)`.
 
-        A margin account, not a spot one. Opening posts margin; closing releases
-        the margin that was posted and realises the profit or loss against the
-        average entry. Modelling it as spot — where selling simply credits the
-        proceeds — makes a short look like income and leaves the margin behind a
-        closed position locked forever.
+        A margin account, not a spot one. Opening posts margin into the book;
+        closing releases it and realises the profit or loss against the average
+        entry. Modelling it as spot — where selling simply credits the proceeds —
+        makes a short look like income and leaves margin locked forever.
+
+        **Margin is never deducted from cash.** It is held in the book and
+        reported by `posted_margin`, exactly as the runner's `AccountState`
+        treats it: cash there moves only on fees and realised PnL, with margin
+        derived from the open positions.
+
+        Having the two disagree about what the word "cash" means is not cosmetic.
+        It let this ledger drift to −890,060,236 while the runner's account read
+        +96,087,532 on the same session, and since the ledger is the one that
+        vetoes an opening order, the bot spent its time refusing trades the risk
+        engine had correctly approved.
         """
         signed = qty * side.sign
         held, avg, margin = self._book.get(symbol, (ZERO, ZERO, ZERO))
         lev = leverage if leverage > 0 else Decimal(1)
 
-        # Same direction, or opening from flat: post margin.
+        # Same direction, or opening from flat: post margin into the book.
         if held == 0 or (held > 0) == (signed > 0):
             new_qty = held + signed
             total = abs(held) * avg + abs(signed) * price
             new_avg = total / abs(new_qty) if new_qty else ZERO
             posted = abs(signed) * price / lev
             self._book[symbol] = (new_qty, new_avg, margin + posted)
-            return -posted, False
+            return ZERO, False
 
         # Opposite direction: reduce, and possibly flip.
         closed = min(abs(signed), abs(held))
@@ -197,18 +210,29 @@ class PaperExchange(Exchange):
         realised = (price - avg) * closed * direction
         released = margin * (closed / abs(held))
         remaining = held + signed
-        cash = released + realised
 
         if remaining == 0:
             self._book.pop(symbol, None)
         elif (remaining > 0) == (held > 0):
             self._book[symbol] = (remaining, avg, margin - released)
         else:
-            # Flipped through flat: the excess opens a new position the other way.
-            opened = abs(remaining) * price / lev
-            self._book[symbol] = (remaining, price, opened)
-            cash -= opened
-        return cash, True
+            # Flipped through flat: the excess opens a new position the other
+            # way, posting its own margin. Only the realised PnL touches cash.
+            self._book[symbol] = (remaining, price, abs(remaining) * price / lev)
+        return realised, True
+
+    def posted_margin(self) -> Decimal:
+        """Total margin currently tied up in open positions."""
+        return sum((m for _, _, m in self._book.values()), ZERO)
+
+    def free_capital(self) -> Decimal:
+        """Cash not already backing an open position.
+
+        This, not the raw balance, is what an opening order has to fit inside —
+        the same quantity the risk engine calls `free_margin`.
+        """
+        current = self._balances.get(self.quote_asset, Balance(self.quote_asset, ZERO, ZERO))
+        return current.free - self.posted_margin()
 
     def position_book(self) -> dict[str, tuple[Decimal, Decimal, Decimal]]:
         """(signed qty, average entry, posted margin) per symbol. For tests."""
@@ -259,8 +283,19 @@ class PaperExchange(Exchange):
         fee = self._costs.fee(notional, type)
 
         leverage = self._leverage.get(symbol, Decimal(1))
+        # The book is updated first so the funds check sees the position this
+        # order would create, then rolled back if the check refuses — otherwise
+        # a rejected order leaves a phantom position and its margin behind.
+        before = self._book.get(symbol)
         cash_delta, closing = self._apply_to_book(symbol, side, qty, fill_price, leverage)
-        self._credit(self.quote_asset, cash_delta - fee, closing=closing or reduce_only)
+        try:
+            self._credit(self.quote_asset, cash_delta - fee, closing=closing or reduce_only)
+        except InsufficientFunds:
+            if before is None:
+                self._book.pop(symbol, None)
+            else:
+                self._book[symbol] = before
+            raise
 
         order = Order(
             id=oid, symbol=symbol, side=side, type=type, qty=qty, price=price,

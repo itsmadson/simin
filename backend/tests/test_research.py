@@ -351,3 +351,105 @@ class TestPaperDelegatesMarketData:
         ex = PaperExchange()
         assert await ex.tickers() == []
         assert await ex.order_book("BTCUSDT") is None
+
+
+class TestPaperLedgerAgreesWithTheRunner:
+    """Regression: two accounting systems that disagreed about the word "cash".
+
+    Found in a live session — the paper ledger read −890,060,236 USDT while the
+    runner's account read +96,087,532 on the same bot. The ledger was deducting
+    posted margin from cash; the runner keeps margin derived from open positions
+    and only moves cash on fees and realised PnL. Since the ledger is the side
+    that vetoes an opening order, the bot spent its time refusing trades the
+    risk engine had already approved.
+
+    Margin now lives in the book on both sides, and an opening order is judged
+    against capital not already backing a position.
+    """
+
+    async def _open(self, ex, symbol, side, qty, mark, lev="1"):
+        from simin.core.types import OrderType
+
+        ex.set_mark(symbol, Decimal(mark))
+        await ex.set_leverage(symbol, Decimal(lev))
+        return await ex.place_order(symbol, side, OrderType.MARKET, Decimal(qty))
+
+    async def test_opening_does_not_drain_cash(self) -> None:
+        """Cash moves on fees and realised PnL only — never on posted margin."""
+        from simin.core.types import Side
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(starting_balance=Decimal("100000"))
+        await self._open(ex, "BTCUSDT", Side.BUY, "1", "50000", lev="5")
+
+        free = (await ex.balances())["USDT"].free
+        assert free == pytest.approx(Decimal("100000"), abs=Decimal("60"))
+        assert ex.posted_margin() == pytest.approx(Decimal("10000"), abs=Decimal("30"))
+        assert ex.free_capital() == pytest.approx(Decimal("90000"), abs=Decimal("60"))
+
+    async def test_cash_cannot_run_away_across_many_positions(self) -> None:
+        """The exact shape of the drift: several large leveraged opens used to
+        drive the balance arbitrarily negative."""
+        from simin.core.types import Side
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(starting_balance=Decimal("1000000"))
+        for i, sym in enumerate(("BTCUSDT", "ETHUSDT", "SOLUSDT")):
+            await self._open(ex, sym, Side.BUY if i % 2 else Side.SELL, "2", "50000", lev="6")
+
+        free = (await ex.balances())["USDT"].free
+        assert free > 0, "cash went negative purely from opening positions"
+        assert free == pytest.approx(Decimal("1000000"), abs=Decimal("400"))
+        assert ex.posted_margin() > 0
+
+    async def test_free_capital_is_what_gates_an_open(self) -> None:
+        """A balance that still looks healthy can already be fully committed."""
+        from simin.core.types import OrderType, Side
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(starting_balance=Decimal("10000"))
+        await self._open(ex, "BTCUSDT", Side.BUY, "1", "9000", lev="1")
+        assert ex.free_capital() < Decimal("1100")
+
+        ex.set_mark("ETHUSDT", Decimal("9000"))
+        with pytest.raises(Exception) as exc:
+            await ex.place_order("ETHUSDT", Side.BUY, OrderType.MARKET, Decimal("1"))
+        assert "free of margin" in str(exc.value)
+
+    async def test_a_refused_order_leaves_no_phantom_position(self) -> None:
+        from simin.core.types import OrderType, Side
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(starting_balance=Decimal("100"))
+        ex.set_mark("BTCUSDT", Decimal("50000"))
+        with pytest.raises(Exception):
+            await ex.place_order("BTCUSDT", Side.BUY, OrderType.MARKET, Decimal("1"))
+        assert ex.position_book() == {}
+        assert ex.posted_margin() == 0
+
+    async def test_a_refused_add_leaves_the_original_position_intact(self) -> None:
+        from simin.core.types import OrderType, Side
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(starting_balance=Decimal("10000"))
+        await self._open(ex, "BTCUSDT", Side.BUY, "1", "5000", lev="1")
+        snapshot = ex.position_book()["BTCUSDT"]
+
+        with pytest.raises(Exception):
+            await ex.place_order("BTCUSDT", Side.BUY, OrderType.MARKET, Decimal("10"))
+        assert ex.position_book()["BTCUSDT"] == snapshot
+
+    async def test_round_trip_still_lands_on_the_right_pnl(self) -> None:
+        from simin.core.types import OrderType, Side
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(starting_balance=Decimal("100000"))
+        await self._open(ex, "BTCUSDT", Side.BUY, "10", "100", lev="2")
+        ex.set_mark("BTCUSDT", Decimal("110"))
+        await ex.place_order("BTCUSDT", Side.SELL, OrderType.MARKET, Decimal("10"),
+                             reduce_only=True)
+
+        assert ex.position_book() == {}
+        assert ex.posted_margin() == 0
+        free = (await ex.balances())["USDT"].free
+        assert free == pytest.approx(Decimal("100100"), abs=Decimal("5"))
