@@ -170,6 +170,10 @@ class RiskEngine:
     #: A stop further than this means the strategy has no real idea where it is
     #: wrong; the resulting position is too small to matter anyway.
     MAX_STOP_FRACTION = Decimal("0.25")
+    #: Fraction of free margin a single position may post. The remainder covers
+    #: entry and exit commissions and any funding accrued while the position is
+    #: open — all of which are debited from the same balance the margin sits in.
+    MARGIN_UTILISATION = Decimal("0.97")
 
     def __init__(self, profile: RiskProfile, max_capital: Decimal = ZERO) -> None:
         self.profile = profile
@@ -277,7 +281,12 @@ class RiskEngine:
         # free margin does not need leverage at all, and unused leverage is
         # unused liquidation risk.
         cap_leverage = min(p.max_leverage, Decimal(max(symbol.max_leverage, 1)))
-        needed = notional / acct.free_margin if acct.free_margin > 0 else cap_leverage
+        # Pick the least leverage that still fits, which keeps the liquidation
+        # price as far away as possible. "Fits" means inside the usable margin,
+        # not all of it — sizing against the full balance leaves nothing to pay
+        # the commission and lands the order fractionally short every time.
+        usable = acct.free_margin * self.MARGIN_UTILISATION
+        needed = notional / usable if usable > 0 else cap_leverage
         leverage = max(Decimal(1), min(needed, cap_leverage)).quantize(Decimal("0.01"))
 
         notes: list[str] = []
@@ -308,11 +317,17 @@ class RiskEngine:
                 notional = allowed
                 notes.append("capped by SIMIN_MAX_CAPITAL")
 
-        # Ceiling 4: margin actually available.
+        # Ceiling 4: margin actually available, less a buffer.
+        #
+        # Posting *all* free margin leaves nothing to pay the entry fee, so the
+        # order is short by exactly the commission and the venue rejects it. On
+        # the paper adapter that showed up as free capital of −53.34 on a
+        # hundred-million-dollar account: a maximally sized position, refused by
+        # the width of its own fee. A real venue rejects it too.
         margin = notional / leverage
-        if margin > acct.free_margin:
-            notional = acct.free_margin * leverage
-            margin = acct.free_margin
+        if margin > usable:
+            notional = usable * leverage
+            margin = usable
             notes.append("capped by free margin")
 
         if notional <= 0:

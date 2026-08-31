@@ -260,12 +260,22 @@ class PaperExchange(Exchange):
         oid = f"paper-{next(self._ids)}"
         now = datetime.now(UTC)
 
-        if type is OrderType.LIMIT:
-            if price is None:
+        # Anything with a trigger rests until price reaches it — it does not
+        # fill now. Treating a protective stop as an immediate market order is
+        # catastrophic and quiet: the runner places a stop straight after an
+        # entry, so the "stop" instantly closed the position in the book while
+        # the runner still held it. When the stop later genuinely fired, the
+        # closing order hit a flat book and *opened a short*, stranding its
+        # margin behind a position nobody knew existed. Repeat a few times and
+        # free capital is gone.
+        if type in (OrderType.LIMIT, OrderType.STOP_MARKET, OrderType.TAKE_PROFIT_MARKET):
+            if type is OrderType.LIMIT and price is None:
                 raise ValueError("limit order requires a price")
-            # Resting orders are not filled here; the runner marks them when
-            # price trades through. Pretending a limit fills immediately at its
-            # price is the same optimism that makes bad backtests.
+            if type is not OrderType.LIMIT and stop_price is None:
+                raise ValueError(f"{type} requires a stop price")
+            # Resting orders are not filled here; the runner manages its own
+            # exits bar by bar. Pretending one fills immediately at its price is
+            # the same optimism that makes bad backtests.
             order = Order(
                 id=oid, symbol=symbol, side=side, type=type, qty=qty, price=price,
                 stop_price=stop_price, reduce_only=reduce_only, client_id=client_id,
@@ -273,6 +283,20 @@ class PaperExchange(Exchange):
             )
             self._orders[oid] = order
             return order
+
+        # `reduce_only` is an invariant, not a hint: such an order may shrink a
+        # position and never open or grow one. Enforcing it here makes the whole
+        # phantom-position class of bug impossible rather than merely fixed.
+        if reduce_only:
+            held = self._book.get(symbol, (ZERO, ZERO, ZERO))[0]
+            opposes = held != 0 and (held > 0) != (side is Side.BUY)
+            if not opposes:
+                return Order(
+                    id=oid, symbol=symbol, side=side, type=type, qty=qty, price=price,
+                    stop_price=stop_price, reduce_only=True, client_id=client_id,
+                    status=OrderStatus.CANCELED, created_at=now,
+                )
+            qty = min(qty, abs(held))
 
         ticker = await self.ticker(symbol)
         reference = ticker.ask if side is Side.BUY else ticker.bid

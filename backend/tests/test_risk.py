@@ -354,3 +354,38 @@ class TestVenueAdaptation:
             async def get_order(self, *a): raise NotImplementedError
 
         assert adapt_profile(profile(9), Futures()).max_leverage == profile(9).max_leverage
+
+
+class TestMarginHeadroom:
+    """A position sized to 100% of free margin cannot pay its own commission.
+
+    Observed live: free capital landed at −53.34 on a hundred-million-dollar
+    account, and the entry was refused by the width of its own fee. A real venue
+    rejects that too — margin and fees come out of the same balance.
+    """
+
+    def test_a_maximal_position_leaves_room_for_fees(self, symbol) -> None:
+        engine = RiskEngine(profile(8))
+        acct = account("100000")
+        # A tight stop forces the largest position the account can carry.
+        sizing = engine.size(
+            Intent(Signal.LONG, 0.9, stop_price=Decimal("99.7")), symbol,
+            Decimal("100"), acct, 100,
+        )
+        assert sizing.approved
+        assert sizing.margin_required <= acct.free_margin * RiskEngine.MARGIN_UTILISATION
+        assert sizing.margin_required < acct.free_margin
+
+    def test_headroom_is_a_small_fraction(self) -> None:
+        """Large enough to cover a round trip, small enough not to waste capital."""
+        assert Decimal("0.95") <= RiskEngine.MARGIN_UTILISATION < 1
+
+    def test_sizing_still_scales_with_the_dial(self, symbol) -> None:
+        """The buffer must not disturb the ordering the dial depends on."""
+        sizes = [
+            RiskEngine(profile(lv))
+            .size(long_intent(), symbol, Decimal("100"), account(), 100)
+            .qty
+            for lv in range(1, 11)
+        ]
+        assert sizes == sorted(sizes)

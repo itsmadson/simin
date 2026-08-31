@@ -373,18 +373,27 @@ class TestPaperLedger:
     """
 
     async def test_reduce_only_is_never_refused_for_funds(self) -> None:
-        from simin.core.types import Side
+        """Closing an underwater position must not be blocked by the balance.
 
-        ex = PaperExchange(starting_balance=Decimal("100"))
-        ex.set_mark("BTCUSDT", Decimal("50000"))
+        The position has to exist for this to mean anything — a reduce-only
+        order with nothing to reduce is a no-op, not a fill, which is the
+        separate invariant covered in test_research.py.
+        """
+        from simin.core.types import OrderType, Side
+
+        ex = PaperExchange(starting_balance=Decimal("10000"))
+        ex.set_mark("ETHUSDT", Decimal("1000"))
+        await ex.place_order("ETHUSDT", Side.SELL, OrderType.MARKET, Decimal("5"))
+
+        # Price doubles against the short: buying it back costs far more than
+        # the sale brought in, and a naive funds check would trap it open.
+        ex.set_mark("ETHUSDT", Decimal("2000"))
         order = await ex.place_order(
-            "BTCUSDT", Side.BUY, __import__(
-                "simin.core.types", fromlist=["OrderType"]
-            ).OrderType.MARKET,
-            Decimal("1"), reduce_only=True,
+            "ETHUSDT", Side.BUY, OrderType.MARKET, Decimal("5"), reduce_only=True
         )
         assert order.status.value == "filled"
-        assert order.filled_qty == Decimal("1")
+        assert order.filled_qty == Decimal("5")
+        assert ex.position_book() == {}
 
     async def test_opening_orders_are_still_refused(self) -> None:
         from simin.core.types import OrderType, Side

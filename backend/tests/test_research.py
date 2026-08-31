@@ -453,3 +453,114 @@ class TestPaperLedgerAgreesWithTheRunner:
         assert ex.posted_margin() == 0
         free = (await ex.balances())["USDT"].free
         assert free == pytest.approx(Decimal("100100"), abs=Decimal("5"))
+
+
+class TestReduceOnlyAndRestingStops:
+    """Regression: a protective stop that filled instantly, and a reduce-only
+    order that opened a position.
+
+    Observed on a live bot. The runner places a protective stop immediately
+    after an entry. The paper adapter treated STOP_MARKET as a market order, so
+    the stop closed the position in the book while the runner still held it —
+    and when the stop later genuinely fired, the closing order met a flat book
+    and opened a *short*, stranding margin behind a position nobody tracked.
+    After a few cycles free capital was gone and every new entry was refused.
+    """
+
+    async def test_a_protective_stop_rests_and_does_not_fill(self) -> None:
+        from simin.core.types import OrderType, Side
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(starting_balance=Decimal("100000"))
+        ex.set_mark("BTCUSDT", Decimal("100"))
+        await ex.place_order("BTCUSDT", Side.BUY, OrderType.MARKET, Decimal("10"))
+        book_after_entry = ex.position_book()["BTCUSDT"]
+
+        stop = await ex.place_order(
+            "BTCUSDT", Side.SELL, OrderType.STOP_MARKET, Decimal("10"),
+            stop_price=Decimal("95"), reduce_only=True,
+        )
+        assert stop.status.value == "open", "a protective stop must rest, not fill"
+        assert ex.position_book()["BTCUSDT"] == book_after_entry
+
+    async def test_a_stop_without_a_trigger_price_is_rejected(self) -> None:
+        from simin.core.types import OrderType, Side
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(starting_balance=Decimal("10000"))
+        ex.set_mark("BTCUSDT", Decimal("100"))
+        with pytest.raises(ValueError, match="stop price"):
+            await ex.place_order("BTCUSDT", Side.SELL, OrderType.STOP_MARKET, Decimal("1"))
+
+    async def test_reduce_only_never_opens_a_position(self) -> None:
+        """The invariant that makes the phantom-position bug impossible."""
+        from simin.core.types import OrderType, Side
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(starting_balance=Decimal("100000"))
+        ex.set_mark("BTCUSDT", Decimal("100"))
+
+        order = await ex.place_order(
+            "BTCUSDT", Side.SELL, OrderType.MARKET, Decimal("10"), reduce_only=True
+        )
+        assert order.status.value == "canceled"
+        assert ex.position_book() == {}
+        assert ex.posted_margin() == 0
+
+    async def test_reduce_only_never_grows_a_position(self) -> None:
+        from simin.core.types import OrderType, Side
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(starting_balance=Decimal("100000"))
+        ex.set_mark("BTCUSDT", Decimal("100"))
+        await ex.place_order("BTCUSDT", Side.BUY, OrderType.MARKET, Decimal("10"))
+
+        # Same direction as the position — must not add to it.
+        order = await ex.place_order(
+            "BTCUSDT", Side.BUY, OrderType.MARKET, Decimal("5"), reduce_only=True
+        )
+        assert order.status.value == "canceled"
+        assert ex.position_book()["BTCUSDT"][0] == Decimal("10")
+
+    async def test_reduce_only_is_clamped_to_the_open_size(self) -> None:
+        """Over-closing must flatten, never flip through into a new position."""
+        from simin.core.types import OrderType, Side
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(starting_balance=Decimal("100000"))
+        ex.set_mark("BTCUSDT", Decimal("100"))
+        await ex.place_order("BTCUSDT", Side.BUY, OrderType.MARKET, Decimal("10"))
+
+        order = await ex.place_order(
+            "BTCUSDT", Side.SELL, OrderType.MARKET, Decimal("999"), reduce_only=True
+        )
+        assert order.filled_qty == Decimal("10")
+        assert ex.position_book() == {}
+        assert ex.posted_margin() == 0
+
+    async def test_entry_stop_exit_cycle_leaves_no_residue(self) -> None:
+        """The full sequence the runner performs, repeated. Margin must return
+        to zero every time rather than accumulating behind phantom shorts."""
+        from simin.core.types import OrderType, Side
+        from simin.exchanges.paper import PaperExchange
+
+        ex = PaperExchange(starting_balance=Decimal("1000000"))
+        for i in range(5):
+            ex.set_mark("ETHUSDT", Decimal("1000"))
+            await ex.place_order("ETHUSDT", Side.BUY, OrderType.MARKET, Decimal("10"))
+            # Protective stop, as the runner places it.
+            await ex.place_order(
+                "ETHUSDT", Side.SELL, OrderType.STOP_MARKET, Decimal("10"),
+                stop_price=Decimal("950"), reduce_only=True,
+            )
+            # The stop later fires; the runner closes at market.
+            ex.set_mark("ETHUSDT", Decimal("950"))
+            await ex.place_order(
+                "ETHUSDT", Side.SELL, OrderType.MARKET, Decimal("10"), reduce_only=True
+            )
+            assert ex.position_book() == {}, f"residue after cycle {i}"
+            assert ex.posted_margin() == 0, f"margin stranded after cycle {i}"
+
+        free = ex.free_capital()
+        # Five losing round trips of 500 each, plus fees. Nowhere near exhausted.
+        assert free == pytest.approx(Decimal("997500"), abs=Decimal("500"))
